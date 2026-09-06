@@ -561,6 +561,35 @@ async function scanBreakdown(buf, entry, density, diameter) {
 }
 
 /**
+ * The density the slice was actually computed with, from the project's own
+ * filament settings, weighted by how much of each filament the print uses.
+ *
+ * Assuming one figure is close but not free: this project mixes a 1.24 g/cm3
+ * generic PLA with a 1.26 Bambu PLA Basic, and pricing the whole print at 1.26
+ * read 1.5% heavy across every component.
+ */
+function projectDensity(entries, buf, filaments) {
+  const entry = entries.find((e) => /project_settings\.config$/i.test(e.name));
+  if (!entry) return null;
+  let densities;
+  try {
+    densities = JSON.parse(zipReader.readEntry(buf, entry).toString('utf8')).filament_density;
+  } catch { return null; }
+  if (!Array.isArray(densities) || !densities.length) return null;
+
+  let grams = 0;
+  let weighted = 0;
+  for (const f of filaments) {
+    const d = parseFloat(densities[Number(f.id) - 1]);
+    if (!Number.isFinite(d) || d <= 0) continue;
+    weighted += d * f.grams;
+    grams += f.grams;
+  }
+  if (grams <= 0) return null;
+  return weighted / grams;
+}
+
+/**
  * Reads the numbers Bambu Studio already computed, out of a sliced project.
  *
  * A .3mf that has been sliced carries Metadata/slice_info.config, and in it one
@@ -634,7 +663,8 @@ async function readEmbeddedSliceInfo(modelPath) {
       .filter((e) => /\.gcode$/i.test(e.name))
       .sort((a, b) => a.name.localeCompare(b.name))[0];
     if (gentry) {
-      breakdown = await scanBreakdown(buf, gentry, DEFAULT_DENSITY, DEFAULT_DIAMETER);
+      const density = projectDensity(zipReader.listEntries(buf), buf, filaments) || DEFAULT_DENSITY;
+      breakdown = await scanBreakdown(buf, gentry, density, DEFAULT_DIAMETER);
     }
   } catch { /* the per-filament totals still stand on their own */ }
 

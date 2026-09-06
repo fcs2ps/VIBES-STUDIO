@@ -223,7 +223,8 @@ class FeatureScanner {
     this.partial = '';
     this.current = 'model';
     this.mmByCategory = { model: 0, support: 0, purge: 0, tower: 0 };
-    this.inFlush = false;
+    this.inAnnotatedFlush = false;
+    this.inExecutedFlush = false;
     this.flushBlocks = 0;
     // Bambu emits M83 (relative E) but tool-change blocks can flip to absolute,
     // so both are tracked rather than assumed.
@@ -254,9 +255,37 @@ class FeatureScanner {
        * VFLUSH_END. Summing executed moves therefore misses every gram of it —
        * on a 319-change print that was 108g, half the job.
        */
-      if (line.includes('VFLUSH_START')) { this.inFlush = true; this.flushBlocks++; return; }
-      if (line.includes('VFLUSH_END')) { this.inFlush = false; return; }
-      if (this.inFlush) {
+      /*
+       * Purge comes in two dialects, and they must not be conflated.
+       *
+       * ANNOTATED (VFLUSH_START/END). On an AMS machine the flush is performed
+       * by firmware macros, and the G-code only *says* how much, as commented
+       * `;VG1 E<n>` lines. Summing executed moves there misses every gram — on
+       * a 319-change print that was 108g, half the job. The same markers also
+       * wrap the start-of-print prime line, which carries no annotation and is
+       * not a colour change, so an unannotated VFLUSH region contributes
+       * nothing.
+       *
+       * EXECUTED (FLUSH_START/END). A project sliced for a machine that purges
+       * by extruding really does extrude it, as bare E moves with no travel.
+       * Those have to be counted from the moves themselves.
+       *
+       * Checked in this order because "VFLUSH_START" contains "FLUSH_START".
+       */
+      if (line.includes('VFLUSH_START')) { this.inAnnotatedFlush = true; this.flushBlocks++; return; }
+      if (line.includes('VFLUSH_END')) { this.inAnnotatedFlush = false; return; }
+
+      const flush = /^;\s*FLUSH_(START|END)\s*$/.exec(line.trim());
+      if (flush) {
+        // Matched whole-line, not by substring: the settings block at the head
+        // of the file quotes the whole change-filament macro, FLUSH markers and
+        // all, on a single line. Treating that as a real flush left the scanner
+        // inside a purge for thousands of lines and put 6.8g on the total.
+        this.inExecutedFlush = flush[1] === 'START';
+        return;
+      }
+
+      if (this.inAnnotatedFlush) {
         const v = /^;VG1\s+E([0-9.]+)/.exec(line.trim());
         if (v) this.mmByCategory.purge += parseFloat(v[1]);
       }
@@ -274,17 +303,33 @@ class FeatureScanner {
     // entirely arcs - so ignoring them lost most of the support material.
     if (!/^G[0123] /.test(line)) return;
 
+    const e = /\bE(-?[0-9.]+)/.exec(line);
+    if (!e) return;
+    const value = parseFloat(e[1]);
+    if (!Number.isFinite(value)) return;
+
+    const travels = /[XY]-?[0-9.]/.test(line);
+
+    /*
+     * Inside a flush block the nozzle stands over the chute and pushes filament
+     * out without going anywhere, so the purge is a bare E move. That is the
+     * one place a move with no travel lays down material, and it has to be
+     * taken before the deretraction rule below discards it — on a 66-change
+     * print it is 6781mm of filament, 20.2g against Bambu's own 20.44g.
+     */
+    if (this.inExecutedFlush && !travels) {
+      const delta = this.relative ? value : value - this.lastAbsE;
+      if (!this.relative) this.lastAbsE = value;
+      if (delta > 0) this.mmByCategory.purge += delta;
+      return;
+    }
+
     // Only a move that travels lays material down. A bare `G1 E0.8 F1800` is a
     // deretraction priming the nozzle after a hop, and support geometry is full
     // of them - one per island, hundreds per print. Counting those more than
     // doubled the support figure and put the total 44% over what the slicer
     // itself reported.
-    if (!/[XY]-?[0-9.]/.test(line)) return;
-
-    const e = /\bE(-?[0-9.]+)/.exec(line);
-    if (!e) return;
-    const value = parseFloat(e[1]);
-    if (!Number.isFinite(value)) return;
+    if (!travels) return;
 
     if (this.relative) {
       // Retractions are negative and get pushed back out again; only forward

@@ -109,5 +109,94 @@ check('prefers total estimated time over model printing time', () => {
   assert.strictEqual(r.timeSeconds, 10800, 'got ' + r.timeSeconds);
 });
 
+/*
+ * Purge accounting, in both dialects.
+ *
+ * On a multi-colour job the purge is the largest single line on the quote —
+ * 347g against a 24g model on one real figurine — so getting it wrong is
+ * getting the price wrong.
+ */
+const { FeatureScanner } = require('../src/gcode');
+
+function scan(text) {
+  const s = new FeatureScanner();
+  s.push(text);
+  s.end();
+  return s.grams(1.26, 1.75);
+}
+
+// 1.75mm PLA at 1.26 g/cm3: one mm of filament is this many grams. Lengths
+// below are in the hundreds so the 2dp rounding in grams() cannot swamp them.
+const G_PER_MM = Math.PI * Math.pow(1.75 / 2 / 10, 2) * (1 / 10) * 1.26;
+const near = (got, mm, what) =>
+  assert.ok(Math.abs(got - mm * G_PER_MM) < 0.02, what + ': expected ' +
+    (mm * G_PER_MM).toFixed(2) + 'g for ' + mm + 'mm, got ' + got);
+
+check('counts annotated (AMS) purge from ;VG1, not from executed moves', () => {
+  // The machine flushes by firmware macro; the G-code only says how much.
+  const g = scan([
+    'M83',
+    '; FEATURE: Outer wall',
+    'G1 X10 Y10 E1.0',
+    '; VFLUSH_START',
+    ';VG1 E1000.0',
+    'G1 E500.0',               // executed prime, already covered by the ;VG1
+    '; VFLUSH_END',
+    '',
+  ].join('\n'));
+  near(g.purge, 1000, 'purge from annotation only');
+});
+
+check('an unannotated VFLUSH region is the prime line, not a colour change', () => {
+  // Every single-filament print opens with one of these. Counting the prime
+  // extrusion as purge put 2.84g of colour-change waste on prints that never
+  // change colour.
+  const g = scan([
+    'M83',
+    '; VFLUSH_START',
+    'G1 E1000.0',
+    '; VFLUSH_END',
+    '; FEATURE: Outer wall',
+    'G1 X10 Y10 E1.0',
+    '',
+  ].join('\n'));
+  assert.strictEqual(g.purge, 0, 'prime line is not purge, got ' + g.purge);
+});
+
+check('counts executed purge inside FLUSH_START/END as bare E moves', () => {
+  const g = scan([
+    'M83',
+    '; FEATURE: Outer wall',
+    'G1 X10 Y10 E1.0',
+    '; FLUSH_START',
+    'G1 E800.0 F299',
+    'G1 E200.0 F523',
+    '; FLUSH_END',
+    '',
+  ].join('\n'));
+  near(g.purge, 1000, 'executed purge');
+});
+
+check('the settings block quoting FLUSH markers is not a flush', () => {
+  // Bambu writes the whole change-filament macro onto one comment line at the
+  // head of the file. Matching FLUSH_START by substring left the scanner inside
+  // a purge for thousands of lines.
+  const g = scan([
+    'M83',
+    '; change_filament_gcode = ;=P1P=\\n; FLUSH_START\\nG1 E23.7\\n; FLUSH_END\\n',
+    '; FEATURE: Outer wall',
+    'G1 X10 Y10 E1000.0',
+    'G1 E500.0',               // a deretraction, outside any flush
+    '',
+  ].join('\n'));
+  assert.strictEqual(g.purge, 0, 'quoted macro is not a flush, got ' + g.purge);
+  near(g.model, 1000, 'the wall still counts, and the bare move does not');
+});
+
+check('a bare E move outside a flush is still a deretraction', () => {
+  const g = scan(['M83', '; FEATURE: Support', 'G1 E500.0', 'G1 X5 Y5 E1000.0', ''].join('\n'));
+  near(g.support, 1000, 'only the travelling move counts');
+});
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);
