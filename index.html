@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vibes 3D Studio — Instant Print Quotes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="noise-overlay" aria-hidden="true"></div>
+
+<header class="nav">
+  <button class="nav__menu" id="menuBtn" aria-label="Menu">
+    <span></span><span></span><span></span>
+  </button>
+  <div class="nav__mark">Vibes<span class="nav__mark-dim">3D</span>Studio</div>
+  <div class="nav__spacer" aria-hidden="true"></div>
+</header>
+
+<nav class="drawer" id="drawer" aria-hidden="true">
+  <a href="#quote">Get a quote</a>
+  <a href="#how">How it works</a>
+  <a href="#services">Services</a>
+  <a href="#footer">Contact</a>
+</nav>
+
+<main>
+
+  <section class="hero">
+    <p class="hero__eyebrow">FDM print-on-demand · Bambu Lab P2S fleet</p>
+    <h1 class="hero__title">Upload a model.<br>Get an <em>instant</em> quote.</h1>
+    <p class="hero__sub">Standard, multicolor, and large-format prints — priced from a real slice of your file, not a guess.</p>
+  </section>
+
+  <section class="quote" id="quote">
+
+    <!-- STAGE 1: dropzone (hidden once a file is loaded) -->
+    <div class="dropzone" id="dropzone">
+      <p class="dropzone__label">Drag and drop a model here</p>
+      <div class="dropzone__icon">
+        <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+          <path d="M12 16V4M12 4L7 9M12 4l5 5" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="dropzone__actions">
+        <button class="btn btn--primary" id="uploadBtn">Upload a file</button>
+        <button class="btn btn--ghost" id="howBtn">How it works</button>
+      </div>
+      <input type="file" id="fileInput" accept=".stl,.obj,.3mf" hidden>
+      <p class="dropzone__formats">Supports&nbsp; .3MF&nbsp; .STL&nbsp; .OBJ</p>
+      <div class="dropzone__progress" id="dropProgress" hidden>
+        <div
+          class="quote-progress"
+          id="dropProgressTrack"
+          role="progressbar"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-labelledby="dropStatus"
+        >
+          <div class="quote-progress__fill" id="dropProgressFill"></div>
+        </div>
+        <p class="dropzone__status" id="dropStatus" aria-live="polite"></p>
+      </div>
+      <p class="dropzone__error" id="dropError" role="alert"></p>
+    </div>
+
+    <!-- STAGE 2: workspace (viewer + controls + quote) -->
+    <div class="workspace" id="workspace" hidden>
+
+      <div class="viewer-col">
+        <div class="viewer-frame">
+          <div class="viewer-hints">
+            <span><b>Left click</b> — rotate</span>
+            <span><b>Right click</b> — pan</span>
+            <span><b>Scroll</b> — zoom</span>
+          </div>
+          <div class="viewer-canvas" id="viewerCanvas"></div>
+          <p class="viewer-filename" id="viewerFilename"></p>
+          <button class="btn btn--ghost btn--small viewer-swap" id="swapBtn">Upload a different file</button>
+        </div>
+
+        <div class="sizer" id="sizer">
+          <div class="sizer__head">
+            <label class="sizer__label" for="sizeSlider">Size</label>
+            <output class="sizer__readout" id="sizeReadout" for="sizeSlider"></output>
+          </div>
+          <input
+            class="sizer__slider"
+            type="range"
+            id="sizeSlider"
+            min="0"
+            max="1000"
+            value="0"
+            step="1"
+            aria-label="Model size"
+          >
+          <div class="sizer__scale">
+            <span id="sizeMinLabel">100%</span>
+            <button class="sizer__reset" id="sizeResetBtn" type="button">Reset to original</button>
+            <span id="sizeMaxLabel">fits plate</span>
+          </div>
+        </div>
+
+      </div>
+
+      <aside class="quote-panel" id="quotePanel">
+        <h2 class="quote-panel__title">Your quote</h2>
+
+        <div class="quote-spec">
+          <label class="quote-spec__field">
+            <span>Material</span>
+            <select id="materialSelect"></select>
+          </label>
+          <div class="quote-spec__field">
+            <span>Colors</span>
+            <output class="quote-spec__value" id="colorReadout">&mdash;</output>
+          </div>
+        </div>
+        <p class="quote-spec__note" id="colorNote"></p>
+
+        <div class="quote-idle" id="quoteIdle">
+          <p>Your model is priced automatically from a real slice — not an estimate. Change the size or orientation and slice again for an updated price.</p>
+          <p class="quote-notice" id="backendNotice" hidden></p>
+          <button class="btn btn--primary btn--full" id="sliceBtn">Get exact price</button>
+        </div>
+
+        <div class="quote-loading" id="quoteLoading" hidden>
+          <div
+            class="quote-progress"
+            id="quoteProgress"
+            role="progressbar"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-labelledby="quoteLoadingText"
+          >
+            <div class="quote-progress__fill" id="quoteProgressFill"></div>
+          </div>
+          <p class="quote-loading__text" id="quoteLoadingText">Preparing your model…</p>
+          <p class="quote-loading__hint" id="quoteLoadingHint" aria-live="polite"></p>
+        </div>
+
+        <div class="quote-result" id="quoteResult" hidden>
+          <dl class="quote-lines" id="quoteLines">
+            <!-- filled by JS -->
+          </dl>
+
+          <div class="quote-total">
+            <span>Total</span>
+            <strong id="quoteTotal">$0.00</strong>
+          </div>
+          <p class="quote-min-note" id="quoteMinNote"></p>
+
+          <button class="btn btn--primary btn--full" id="checkoutBtn">Continue to payment</button>
+          <button class="btn btn--ghost btn--full" id="resliceBtn">Re-slice (I changed something)</button>
+          <p class="quote-panel__disclaimer">Shipping, handling, and tax are calculated at checkout once payment is enabled. Filament weight above comes from an actual slice of your model at its current size and orientation — not a volume estimate.</p>
+        </div>
+
+        <div class="quote-error" id="quoteError" hidden>
+          <p id="quoteErrorText"></p>
+          <button class="btn btn--ghost btn--full" id="retrySliceBtn">Try again</button>
+        </div>
+      </aside>
+
+    </div>
+  </section>
+
+  <section class="services" id="services">
+    <h2 class="section-title">What we print</h2>
+    <div class="services__grid">
+      <div class="service-card">
+        <span class="service-card__index">Standard</span>
+        <p>Single-color PLA prints, priced at a flat rate per gram of filament used.</p>
+      </div>
+      <div class="service-card">
+        <span class="service-card__index">Multicolor</span>
+        <p>Multi-filament prints with automatic color changes, at a modest surcharge for the added handling.</p>
+      </div>
+      <div class="service-card">
+        <span class="service-card__index">Large-format</span>
+        <p>Prints that push toward the full 256mm bed carry a large-print handling fee for the extra material and machine time.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="how" id="how">
+    <h2 class="section-title">How it works</h2>
+    <ol class="how__steps">
+      <li><span>1</span><div><h3>Upload your file</h3><p>Drop in a .3mf, .stl, or .obj model.</p></div></li>
+      <li><span>2</span><div><h3>Size it to the bed</h3><p>Scale and reorient your model to fit the P2S's 256×256×256mm build volume.</p></div></li>
+      <li><span>3</span><div><h3>Get your exact price</h3><p>Click "Get exact price" to slice your model and see the real filament cost and any surcharges.</p></div></li>
+      <li><span>4</span><div><h3>Check out</h3><p>Payment processing is coming soon — for now, quotes can be saved and followed up on directly.</p></div></li>
+    </ol>
+  </section>
+
+</main>
+
+<footer class="footer" id="footer">
+  <div class="footer__mark">Vibes 3D Studio</div>
+  <p>Questions about a quote? <a href="mailto:hello@vibes3dstudio.com">hello@vibes3dstudio.com</a></p>
+</footer>
+
+<dialog id="howDialog" class="modal">
+  <h2>How the instant quote works</h2>
+  <ol>
+    <li>We run your model through a real slicing engine at its current size and orientation — the same kind of engine desktop slicers use, not a bounding-box guess.</li>
+    <li>Filament cost is $0.60 per gram, and the weight comes straight from that slice's actual filament length × PLA density.</li>
+    <li>Multicolor and large-format prints add a percentage surcharge for the extra handling.</li>
+    <li>Every quote has a $20 minimum, and shipping/handling/tax are added at checkout.</li>
+  </ol>
+  <button class="btn btn--primary" id="closeDialogBtn">Got it</button>
+</dialog>
+
+<!--
+  Point this at the quoting service if the front end is hosted separately.
+  Leave it unset for same-origin deployments (e.g. behind one reverse proxy).
+    <script>window.VIBES_API_BASE = 'https://quotes.example.com';</script>
+-->
+<script src="bundle.js"></script>
+</body>
+</html>

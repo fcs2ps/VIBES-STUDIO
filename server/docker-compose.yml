@@ -1,0 +1,30 @@
+services:
+  quote-service:
+    build:
+      context: .
+      args:
+        # REQUIRED: point this at the current Bambu Studio Linux AppImage.
+        # https://github.com/bambulab/BambuStudio/releases
+        BAMBU_URL: "${BAMBU_URL:?Set BAMBU_URL to a Bambu Studio Linux AppImage release asset}"
+    ports:
+      - "8080:8080"
+    environment:
+      # Lock this down to your site's origin in production.
+      CORS_ORIGIN: "${CORS_ORIGIN:-*}"
+      MAX_CONCURRENT_SLICES: "2"
+      SLICE_TIMEOUT_MS: "180000"
+      MAX_UPLOAD_BYTES: "104857600"
+    volumes:
+      # Mount your real exported profiles over the placeholders.
+      - ./profiles:/app/profiles:ro
+    tmpfs:
+      # Uploads and slice scratch never need to survive a restart, and keeping
+      # customer models off disk is one less thing to secure.
+      - /tmp:size=2g
+    restart: unless-stopped
+    # Slicing is CPU-bound; give it room but don't let it eat the host.
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4g

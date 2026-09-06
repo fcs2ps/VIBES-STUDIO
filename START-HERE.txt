@@ -1,0 +1,100 @@
+══════════════════════════════════════════════════════════════════
+  VIBES 3D STUDIO — START HERE
+══════════════════════════════════════════════════════════════════
+
+  Double-click:   START-WINDOWS.bat
+
+  (Windows only.)
+
+  A black window opens, and your browser opens the site
+  automatically at:  http://localhost:8080
+
+  Leave the black window open while you're using the site.
+  Closing it stops the server.
+
+
+──────────────────────────────────────────────────────────────────
+  THE FIRST RUN TAKES A MINUTE
+──────────────────────────────────────────────────────────────────
+
+  The first double-click sets the folder up to run on its own.
+  It copies Node.js and Bambu Studio into a "vendor" folder
+  inside this one — about a minute, and about 250 MB of disk.
+
+  After that, this folder needs nothing else. No Node.js on the
+  machine, no Bambu Studio installed, no settings, no internet.
+  Copy it to another computer and it still works.
+
+  You'll see it counting files. That's normal. Every run after
+  the first starts immediately.
+
+
+──────────────────────────────────────────────────────────────────
+  WHAT THAT FIRST RUN NEEDS
+──────────────────────────────────────────────────────────────────
+
+  It copies rather than downloads, so it needs one of each to
+  copy — once, on this machine only:
+
+  1. NODE.JS
+     If it isn't installed, the launcher opens the download
+     page and tells you what to do. Free, about two minutes.
+     Only the first run needs it: setup keeps a copy in the
+     folder and uses that from then on.
+
+  2. BAMBU STUDIO
+     Install it from https://bambulab.com/download if you
+     don't have it. If you already use it for your P2S,
+     there's nothing to do — it gets found automatically.
+
+  Bambu Studio comes as a normal installer rather than a
+  zip file, so there's nothing setup could download and
+  unpack by itself. Copying the one on this machine also
+  means quotes come from the exact version you print with.
+
+  Setup finishes by slicing a test cube and printing the
+  price, so you know it works before a customer does.
+
+
+──────────────────────────────────────────────────────────────────
+  IF DOUBLE-CLICKING DOESN'T WORK
+──────────────────────────────────────────────────────────────────
+
+  A blue "Windows protected your PC" box appears:
+      Click "More info" → "Run anyway"
+
+  IMPORTANT: unzip the folder first. Running the launcher from
+  inside the .zip won't work — the files it needs aren't there yet.
+
+
+──────────────────────────────────────────────────────────────────
+  WHAT WORKS RIGHT AWAY
+──────────────────────────────────────────────────────────────────
+
+  Once setup has run, everything works: the website, uploading
+  models, the 3D viewer, resizing and rotating, and "Get exact
+  price" — which runs a real slice on a real Bambu Lab P2S
+  profile.
+
+  If setup couldn't find Bambu Studio to copy, the app still
+  starts and everything except "Get exact price" works. The
+  black window prints a checklist saying exactly what's
+  missing and what to do about it.
+
+  The printer settings are already here — the standard P2S
+  profile with a 0.4mm nozzle, 0.20mm layers and Bambu PLA
+  Basic. Nothing to pick or configure.
+
+
+──────────────────────────────────────────────────────────────────
+  OTHER FILES
+──────────────────────────────────────────────────────────────────
+
+  README.md                    full documentation
+  vendor/README.md             what got copied into this folder
+  server/README.md             the quoting service in detail
+  dist/vibes3d-studio.html     design preview you can open
+                               directly — but exact pricing
+                               will NOT work from it
+
+══════════════════════════════════════════════════════════════════

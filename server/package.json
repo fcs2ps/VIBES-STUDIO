@@ -1,0 +1,15 @@
+{
+  "name": "vibes3d-quote-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Headless Bambu Studio slicing service. Zero dependencies — Node built-ins only.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node test/gcode.test.cjs && node test/pricing.test.cjs && node test/multipart.test.cjs && node test/zip.test.cjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
