@@ -17,6 +17,14 @@ const zlib = require('zlib');
 const EOCD_SIG = 0x06054b50;         // end of central directory
 const CD_SIG = 0x02014b50;           // central directory file header
 const LFH_SIG = 0x04034b50;          // local file header
+const ZIP64_EOCD_SIG = 0x06064b50;   // ZIP64 end of central directory
+const ZIP64_LOC_SIG = 0x07064b50;    // ZIP64 EOCD locator
+const ZIP64_EXTRA_ID = 0x0001;       // ZIP64 extended information extra field
+
+// In a ZIP64 archive the classic EOCD keeps these saturated placeholders and
+// the real values live in the ZIP64 record.
+const U16_MAX = 0xffff;
+const U32_MAX = 0xffffffff;
 
 function findEndOfCentralDirectory(buf) {
   // The EOCD sits at the end, after a comment of up to 65535 bytes.
@@ -29,6 +37,82 @@ function findEndOfCentralDirectory(buf) {
 }
 
 /**
+ * Reads a 64-bit little-endian value as a Number.
+ *
+ * Sizes and offsets past 2^53 cannot be represented exactly, but they also
+ * cannot occur here: MAX_GCODE_BYTES caps us far below that, and a Buffer
+ * cannot hold more anyway. Failing loudly beats silently truncating.
+ */
+function readU64(buf, off) {
+  const v = buf.readBigUInt64LE(off);
+  if (v > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error('ZIP entry is larger than this reader can address.');
+  }
+  return Number(v);
+}
+
+/**
+ * Resolves the central directory's entry count and offset, following the ZIP64
+ * records when the classic EOCD only carries placeholders.
+ *
+ * WHY THIS MATTERS
+ *   A .3mf is a ZIP, and the tools that write them switch to ZIP64 freely —
+ *   Bambu Studio does. Before this, such a file parsed as *zero entries*
+ *   rather than failing: `isBambuProject` said "not a project" and
+ *   `readEmbeddedSliceInfo` said "no slice info", so a customer's own sliced
+ *   project was silently re-sliced with our profile and quoted from the wrong
+ *   numbers. Nothing anywhere said so, which is the worst kind of wrong.
+ */
+function locateCentralDirectory(buf, eocd) {
+  let entryCount = buf.readUInt16LE(eocd + 10);
+  let offset = buf.readUInt32LE(eocd + 16);
+  if (entryCount !== U16_MAX && offset !== U32_MAX) return { entryCount, offset };
+
+  // The ZIP64 locator sits immediately before the classic EOCD.
+  const loc = eocd - 20;
+  if (loc < 0 || buf.readUInt32LE(loc) !== ZIP64_LOC_SIG) {
+    throw new Error('ZIP64 archive is missing its end-of-central-directory locator.');
+  }
+  const z64 = readU64(buf, loc + 8);
+  if (z64 < 0 || z64 + 56 > buf.length || buf.readUInt32LE(z64) !== ZIP64_EOCD_SIG) {
+    throw new Error('ZIP64 archive is missing its end-of-central-directory record.');
+  }
+  entryCount = readU64(buf, z64 + 32);
+  offset = readU64(buf, z64 + 48);
+  return { entryCount, offset };
+}
+
+/**
+ * Pulls the real size and offset out of an entry's ZIP64 extra field.
+ *
+ * The fields appear in a fixed order but only the ones whose 32-bit slot is
+ * saturated are present, so each is consumed conditionally.
+ */
+function applyZip64Extra(buf, start, len, entry) {
+  let p = start;
+  const end = start + len;
+  while (p + 4 <= end) {
+    const id = buf.readUInt16LE(p);
+    const size = buf.readUInt16LE(p + 2);
+    const body = p + 4;
+    if (id === ZIP64_EXTRA_ID) {
+      let q = body;
+      if (entry.uncompressedSize === U32_MAX && q + 8 <= body + size) {
+        entry.uncompressedSize = readU64(buf, q); q += 8;
+      }
+      if (entry.compressedSize === U32_MAX && q + 8 <= body + size) {
+        entry.compressedSize = readU64(buf, q); q += 8;
+      }
+      if (entry.localHeaderOffset === U32_MAX && q + 8 <= body + size) {
+        entry.localHeaderOffset = readU64(buf, q); q += 8;
+      }
+      return;
+    }
+    p = body + size;
+  }
+}
+
+/**
  * Lists entries without decompressing any of them.
  * @returns {Array<{name: string, compressedSize: number, uncompressedSize: number,
  *                  method: number, localHeaderOffset: number}>}
@@ -37,8 +121,8 @@ function listEntries(buf) {
   const eocd = findEndOfCentralDirectory(buf);
   if (eocd < 0) throw new Error('Not a valid ZIP archive (no end-of-central-directory record).');
 
-  const entryCount = buf.readUInt16LE(eocd + 10);
-  let offset = buf.readUInt32LE(eocd + 16);
+  const { entryCount, offset: cdStart } = locateCentralDirectory(buf, eocd);
+  let offset = cdStart;
 
   const entries = [];
   for (let i = 0; i < entryCount; i++) {
@@ -46,15 +130,21 @@ function listEntries(buf) {
     if (buf.readUInt32LE(offset) !== CD_SIG) break;
 
     const method = buf.readUInt16LE(offset + 10);
-    const compressedSize = buf.readUInt32LE(offset + 20);
-    const uncompressedSize = buf.readUInt32LE(offset + 24);
     const nameLen = buf.readUInt16LE(offset + 28);
     const extraLen = buf.readUInt16LE(offset + 30);
     const commentLen = buf.readUInt16LE(offset + 32);
-    const localHeaderOffset = buf.readUInt32LE(offset + 42);
     const name = buf.toString('utf8', offset + 46, offset + 46 + nameLen);
 
-    entries.push({ name, compressedSize, uncompressedSize, method, localHeaderOffset });
+    const entry = {
+      name,
+      compressedSize: buf.readUInt32LE(offset + 20),
+      uncompressedSize: buf.readUInt32LE(offset + 24),
+      method,
+      localHeaderOffset: buf.readUInt32LE(offset + 42),
+    };
+    if (extraLen) applyZip64Extra(buf, offset + 46 + nameLen, extraLen, entry);
+
+    entries.push(entry);
     offset += 46 + nameLen + extraLen + commentLen;
   }
   return entries;

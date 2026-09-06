@@ -71,6 +71,81 @@ check('inflates a deflated entry correctly',()=>{
   assert.ok(text.includes('123.45'),'got: '+text.slice(0,60));
 });
 
+/*
+ * A .3mf is a ZIP, and the tools that write them use ZIP64 freely. Before the
+ * reader understood it, such a file parsed as ZERO entries instead of failing:
+ * isBambuProject() said "not a project" and readEmbeddedSliceInfo() said "no
+ * slice info", so a customer's own sliced project was quietly re-sliced with
+ * our profile and quoted from the wrong numbers, with nothing saying so.
+ *
+ * Built with the system zip tooling via Node's own zlib is not possible here,
+ * so this constructs a minimal ZIP64 archive by hand: a classic EOCD carrying
+ * the 0xFFFF/0xFFFFFFFF placeholders, plus the ZIP64 EOCD and locator that
+ * hold the real values.
+ */
+function buildZip64(name, content) {
+  const zlib = require('zlib');
+  const nameBuf = Buffer.from(name, 'utf8');
+  const raw = Buffer.from(content, 'utf8');
+  const deflated = zlib.deflateRawSync(raw);
+
+  const lfh = Buffer.alloc(30);
+  lfh.writeUInt32LE(0x04034b50, 0);
+  lfh.writeUInt16LE(20, 4); lfh.writeUInt16LE(8, 8);
+  lfh.writeUInt32LE(deflated.length, 18);
+  lfh.writeUInt32LE(raw.length, 22);
+  lfh.writeUInt16LE(nameBuf.length, 26);
+  const local = Buffer.concat([lfh, nameBuf, deflated]);
+
+  // Central directory entry: sizes and offset saturated, real values in extra.
+  const extra = Buffer.alloc(28);
+  extra.writeUInt16LE(0x0001, 0); extra.writeUInt16LE(24, 2);
+  extra.writeBigUInt64LE(BigInt(raw.length), 4);
+  extra.writeBigUInt64LE(BigInt(deflated.length), 12);
+  extra.writeBigUInt64LE(0n, 20);
+  const cd = Buffer.alloc(46);
+  cd.writeUInt32LE(0x02014b50, 0);
+  cd.writeUInt16LE(20, 6); cd.writeUInt16LE(8, 10);
+  cd.writeUInt32LE(0xffffffff, 20); cd.writeUInt32LE(0xffffffff, 24);
+  cd.writeUInt16LE(nameBuf.length, 28); cd.writeUInt16LE(extra.length, 30);
+  cd.writeUInt32LE(0xffffffff, 42);
+  const central = Buffer.concat([cd, nameBuf, extra]);
+
+  const z64 = Buffer.alloc(56);
+  z64.writeUInt32LE(0x06064b50, 0);
+  z64.writeBigUInt64LE(44n, 4);
+  z64.writeUInt16LE(45, 12); z64.writeUInt16LE(45, 14);
+  z64.writeBigUInt64LE(1n, 24); z64.writeBigUInt64LE(1n, 32);
+  z64.writeBigUInt64LE(BigInt(central.length), 40);
+  z64.writeBigUInt64LE(BigInt(local.length), 48);
+
+  const loc = Buffer.alloc(20);
+  loc.writeUInt32LE(0x07064b50, 0);
+  loc.writeBigUInt64LE(BigInt(local.length + central.length), 8);
+  loc.writeUInt32LE(1, 16);
+
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0xffff, 8); eocd.writeUInt16LE(0xffff, 10);
+  eocd.writeUInt32LE(0xffffffff, 12); eocd.writeUInt32LE(0xffffffff, 16);
+
+  return Buffer.concat([local, central, z64, loc, eocd]);
+}
+
+const z64buf = buildZip64('Metadata/slice_info.config', '<filament used_g="134.15"/>');
+
+check('reads a ZIP64 archive rather than reporting it empty',()=>{
+  const names=zip.listEntries(z64buf).map(e=>e.name);
+  assert.deepStrictEqual(names,['Metadata/slice_info.config']);
+});
+
+check('resolves ZIP64 sizes and offsets from the extra field',()=>{
+  const e=zip.listEntries(z64buf)[0];
+  assert.strictEqual(e.uncompressedSize,27);
+  assert.strictEqual(e.localHeaderOffset,0);
+  assert.ok(zip.readEntry(z64buf,e).toString('utf8').includes('134.15'));
+});
+
 check('rejects a non-ZIP buffer with a clear error',()=>{
   assert.throws(()=>zip.listEntries(Buffer.from('nonsense'.repeat(10))),/valid ZIP/);
 });
