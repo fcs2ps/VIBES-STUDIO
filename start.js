@@ -72,21 +72,27 @@ server.listen(PORT, async () => {
 
   if (diag) {
     console.log('  Slicing engine');
-    if (diag.slicerFound && diag.slicerVendored) {
-      console.log('    [ok]  OrcaSlicer - bundled in this folder');
-      console.log(`          ${diag.slicerBin}`);
+    if (diag.engineRefused) {
+      console.log('    [!!]  ' + diag.engineRefused);
+      console.log('          Quotes are refused rather than answered with a');
+      console.log('          different program. Unset REQUIRE_ENGINE to allow it.');
     } else if (diag.slicerFound) {
-      console.log('    [ok]  OrcaSlicer - using the copy installed on this machine');
+      const how = diag.slicerVendored ? 'bundled in this folder'
+        : 'installed on this machine';
+      console.log(`    [ok]  ${diag.slicerLabel} - ${how}`);
       console.log(`          ${diag.slicerBin}`);
-      console.log('          This folder is meant to carry its own. Rebuild it with:');
-      console.log('            node setup.js --force');
+      if (diag.slicerEngine !== 'bambu') {
+        console.log('          This is the development fallback. Production quotes');
+        console.log('          with Bambu Studio - see "Cloud hosting" in README.md.');
+      }
     } else {
       console.log('    [--]  No slicer found - and this folder should have one.');
-      console.log('          A released copy of this app carries OrcaSlicer inside it,');
-      console.log('          so either vendor/ was deleted or the zip was unpacked');
-      console.log('          incompletely. Rebuild it:');
+      console.log('          A released copy carries OrcaSlicer inside it, so either');
+      console.log('          vendor/ was deleted or the zip was unpacked incompletely.');
+      console.log('          Rebuild it:');
       console.log('            node setup.js');
-      console.log('          Or point at an OrcaSlicer you already have:');
+      console.log('          Or point at a slicer you already have:');
+      console.log('            BAMBU_STUDIO_BIN=/path/to/bambu-studio');
       console.log('            ORCA_SLICER_BIN=/path/to/orca-slicer');
     }
 

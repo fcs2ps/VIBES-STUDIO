@@ -165,19 +165,73 @@ Nothing to install, nothing to break behind a proxy or without network access.
 
 ## Deploying it as a service
 
-The launcher is for running the shop on one machine. To put the quoting service
-on a server, see **`server/README.md`** — it uses Docker with an OrcaSlicer
-Linux AppImage URL passed at build time:
+The launcher runs the shop on one machine. **Production runs in a container
+instead, and quotes with Bambu Studio** — the same program the shop prints
+with, so the price a customer sees is the number the shop sees.
 
 ```bash
 cd server
-export BAMBU_URL="…"        # from https://github.com/bambulab/BambuStudio/releases
 docker compose up -d --build
-curl localhost:8080/api/health
+curl localhost:8080/api/health      # expect "slicerEngine": "bambu"
 ```
 
-The P2S profiles in `server/profiles/` are used there too; `vendor/` is not
-involved, since the image builds its own slicer in.
+The Bambu Studio release is pinned in the `Dockerfile` with its SHA-256, and
+the image verifies the download before running it. Nothing needs installing on
+the host, and nobody — customer or shop — downloads a slicer.
+
+`server/profiles/` travels into the image. `vendor/` does not: the container
+builds its own slicer in.
+
+### Cloud hosting
+
+What the container needs, and what it costs.
+
+**Host OS.** Any Linux that runs Docker — Ubuntu 22.04 or 24.04 LTS, Debian 12,
+or the equivalent. The image is `ubuntu:24.04` internally, so the host
+distribution does not have to match. x86-64 only: Bambu Studio publishes no
+ARM64 Linux build, so Graviton, Ampere and Apple-silicon hosts are out.
+
+**Specs.**
+
+| | Minimum | Recommended | Why |
+|---|---|---|---|
+| vCPU | 2 | **8** | Slicing parallelises across layers, and cores are the cheapest way to make a quote feel instant |
+| RAM | 4 GB | 8 GB | A 25 MB / 500k-triangle mesh peaks around 3 GB while slicing |
+| Disk | 10 GB | 20 GB | The image is ~2.5 GB; the rest is headroom for the layer cache |
+| Network | — | — | Outbound only, at build time. The running service needs no internet |
+
+Measured slice times on **4 cores**: a 40 mm cube under a second, a 110 mm
+figurine about 40 s, a 500k-triangle model about 2 minutes. Eight cores is the
+difference between "wait a moment" and "wait, is it broken".
+
+**Roughly $40–90/month** for an 8-core instance on Hetzner, DigitalOcean or
+Fly. Keep it always-on — a cold start costs more than the slice does.
+
+**Configuration.** `docker-compose.yml` carries sensible defaults. The ones
+worth knowing:
+
+| Variable | Default | |
+|---|---|---|
+| `REQUIRE_ENGINE` | `bambu` | Refuse to quote if Bambu Studio is not the engine, rather than answering with a different program |
+| `QUOTE_CPUS` | `8.0` | Container CPU limit |
+| `MAX_CONCURRENT_SLICES` | `2` | Slices at once. Above this, requests queue |
+| `SLICE_TIMEOUT_MS` | `180000` | Give up on a model that will not slice |
+| `MAX_UPLOAD_BYTES` | `104857600` | 100 MB upload cap |
+| `CORS_ORIGIN` | `*` | **Set this to your site's origin in production** |
+
+**Storage.** `/tmp` is mounted as a 2 GB tmpfs, so uploaded models and slice
+scratch never touch disk and do not survive a restart. That is deliberate:
+customer files are not yours to keep.
+
+**Licensing.** Bambu Studio is AGPLv3. Running it on your own server is
+ordinary use. The `Dockerfile` is publishable because it only *fetches* Bambu
+Studio; the image you build from it contains Bambu Studio, so **keep that image
+in a private registry**. Not legal advice.
+
+**Health.** `/api/health` reports which engine answered and whether it is the
+required one. Alert on `slicerEngine` changing or `engineRefused` becoming
+non-null: both mean quotes have stopped, which is the correct behaviour but
+worth knowing about.
 
 ## How a quote is produced
 

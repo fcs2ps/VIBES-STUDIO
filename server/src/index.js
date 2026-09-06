@@ -350,9 +350,13 @@ async function handleHealth(req, res) {
     setup: diag ? {
       ready: diag.ready,
       slicerFound: diag.slicerFound,
-      // Which Bambu Studio produced this price: the one bundled in the app
-      // folder, or whatever happens to be installed on the host.
+      // Which program produced this price, and whether it came from the copy
+      // bundled in the app folder or one installed on the host. Production
+      // quotes with Bambu Studio; OrcaSlicer is the development fallback.
+      slicerEngine: diag.slicerEngine,
+      slicerLabel: diag.slicerLabel,
       slicerVendored: diag.slicerVendored,
+      engineRefused: diag.engineRefused,
       missingProfiles: diag.missingProfiles,
     } : null,
     queueDepth: waiting.length,

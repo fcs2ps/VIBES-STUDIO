@@ -2,11 +2,12 @@ services:
   quote-service:
     build:
       context: .
-      args:
-        # Defaults to the OrcaSlicer release the profiles were verified
-        # against. Override ORCA_URL only to move off it.
-        # https://github.com/SoftFever/OrcaSlicer/releases
-        ORCA_URL: "${ORCA_URL-}"
+      # The Bambu Studio release is pinned in the Dockerfile, with its checksum.
+      # Deliberately not overridden here: an empty value from an unset shell
+      # variable would silently replace the pin. To move to a new release, edit
+      # BAMBU_STUDIO_URL and BAMBU_STUDIO_SHA256 in the Dockerfile, or pass both
+      # on the command line:
+      #   docker build --build-arg BAMBU_STUDIO_URL=... --build-arg BAMBU_STUDIO_SHA256=... .
     ports:
       - "8080:8080"
     environment:
@@ -23,9 +24,12 @@ services:
       # customer models off disk is one less thing to secure.
       - /tmp:size=2g
     restart: unless-stopped
-    # Slicing is CPU-bound; give it room but don't let it eat the host.
+    # Slicing is CPU-bound and parallelises across layers, so cores are the
+    # cheapest way to hit a quote-while-you-wait target. Two cores is enough to
+    # be correct and too slow to feel instant on a large mesh; 8 is a good
+    # starting point. Measured on 4 cores: a 500k-triangle model took ~2 min.
     deploy:
       resources:
         limits:
-          cpus: "2.0"
-          memory: 4g
+          cpus: "${QUOTE_CPUS:-8.0}"
+          memory: 8g

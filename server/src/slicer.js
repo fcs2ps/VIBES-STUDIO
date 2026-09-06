@@ -21,109 +21,154 @@ const PROFILE_DIR = process.env.PROFILE_DIR || path.join(__dirname, '..', 'profi
 // close enough to that to be a coin flip on a slower shop machine.
 const SLICE_TIMEOUT_MS = Number(process.env.SLICE_TIMEOUT_MS || 600000);
 
-// The copy of OrcaSlicer that ships inside this folder. In a released zip it is
-// always here, which is the whole point: the app depends on nothing installed
-// on the machine. It is checked before anything installed, so a folder carrying
-// its own slicer cannot quietly switch to a different version that happens to
-// be present — different version, different numbers, and nothing on screen
-// would say so.
+/*
+ * WHICH SLICER ANSWERS, AND WHY IT MATTERS
+ *
+ * Production runs Bambu Studio, because the shop prints from Bambu Studio and a
+ * quote has to be the number the shop will see. OrcaSlicer is the fallback that
+ * makes the folder run on a machine with nothing installed — good enough to
+ * develop against, and measured within 1% of Bambu on the same input, but it is
+ * not the same program and it does not get to answer a customer by accident.
+ *
+ * Each engine reads its own profile set. `server/profiles/` is Bambu's presets
+ * exactly as Bambu wrote them; `server/profiles/orca/` is the same settings
+ * adapted so OrcaSlicer will accept them at all. See build-profiles.js.
+ */
 const VENDOR_DIR = path.join(__dirname, '..', '..', 'vendor');
 
+const ENGINES = {
+  bambu: {
+    label: 'Bambu Studio',
+    env: 'BAMBU_STUDIO_BIN',
+    profileDir: PROFILE_DIR,
+    vendorDir: 'bambu-studio',
+    candidates: [
+      '/opt/bambu-studio/AppRun',
+      '/usr/local/bin/bambu-studio',
+      '/usr/bin/bambu-studio',
+      'C:\\Program Files\\Bambu Studio\\bambu-studio.exe',
+      'C:\\Program Files (x86)\\Bambu Studio\\bambu-studio.exe',
+      `${os.homedir()}\\AppData\\Local\\Programs\\Bambu Studio\\bambu-studio.exe`,
+      '/Applications/BambuStudio.app/Contents/MacOS/BambuStudio',
+      '/Applications/Bambu Studio.app/Contents/MacOS/BambuStudio',
+      `${os.homedir()}/Applications/BambuStudio.AppImage`,
+    ],
+  },
+  orca: {
+    label: 'OrcaSlicer',
+    env: 'ORCA_SLICER_BIN',
+    profileDir: path.join(PROFILE_DIR, 'orca'),
+    vendorDir: 'orcaslicer',
+    candidates: [
+      '/opt/OrcaSlicer/AppRun',
+      '/usr/local/bin/orca-slicer',
+      '/usr/bin/orca-slicer',
+      'C:\\Program Files\\OrcaSlicer\\orca-slicer.exe',
+      'C:\\Program Files (x86)\\OrcaSlicer\\orca-slicer.exe',
+      `${os.homedir()}\\AppData\\Local\\Programs\\OrcaSlicer\\orca-slicer.exe`,
+      '/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer',
+      `${os.homedir()}/Applications/OrcaSlicer.AppImage`,
+    ],
+  },
+};
+
+/** Auto-resolution order. Bambu first: it is the one the shop prints with. */
+const ENGINE_ORDER = ['bambu', 'orca'];
+
+function executable(p) {
+  try { fsSync.accessSync(p, fsSync.constants.X_OK); return true; } catch { return false; }
+}
+
 /**
- * Reads the bundled slicer's path out of vendor/MANIFEST.json.
+ * The engine bundled in vendor/, if it is the one asked for.
  *
- * The manifest records where the release build actually put the binary, which
- * differs by platform (a bare .exe, an .app bundle, an extracted AppImage).
- * Reading it beats re-deriving the layout here and drifting out of step with
- * whatever produced the folder.
+ * The manifest records which engine was bundled and where its binary landed,
+ * which differs by platform (a bare .exe, an .app bundle, an extracted
+ * AppImage). Reading it beats re-deriving the layout and drifting out of step
+ * with whatever produced the folder.
  */
-function vendoredBin() {
+function vendoredBin(engineKey) {
   try {
     const manifest = JSON.parse(fsSync.readFileSync(path.join(VENDOR_DIR, 'MANIFEST.json'), 'utf8'));
-    const rel = manifest.slicer && manifest.slicer.bin;
-    if (!rel) return null;
-    const bin = path.join(VENDOR_DIR, rel);
-    fsSync.accessSync(bin, fsSync.constants.X_OK);
-    return bin;
+    const slicer = manifest.slicer || {};
+    const name = String(slicer.name || '').toLowerCase();
+    if (!name.includes(engineKey === 'bambu' ? 'bambu' : 'orca')) return null;
+    const bin = path.join(VENDOR_DIR, slicer.bin);
+    return executable(bin) ? bin : null;
   } catch {
     return null;
   }
 }
 
-/**
- * Where an OrcaSlicer installed the ordinary way puts its executable.
- *
- * Only reached when the bundled copy is missing — a folder someone assembled by
- * hand, or one where vendor/ was deleted. A released zip never gets this far.
- */
-const CANDIDATE_PATHS = [
-  // macOS
-  '/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer',
-  `${os.homedir()}/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer`,
-  // Windows
-  'C:\\Program Files\\OrcaSlicer\\orca-slicer.exe',
-  'C:\\Program Files (x86)\\OrcaSlicer\\orca-slicer.exe',
-  `${os.homedir()}\\AppData\\Local\\Programs\\OrcaSlicer\\orca-slicer.exe`,
-  // Linux
-  '/usr/local/bin/orca-slicer',
-  '/usr/bin/orca-slicer',
-  '/opt/OrcaSlicer/AppRun',
-  `${os.homedir()}/Applications/OrcaSlicer.AppImage`,
-  `${os.homedir()}/.local/bin/orca-slicer`,
-];
-
-let resolvedBin = null;
-let resolvedFromVendor = false;
+let resolved = null;
 
 /**
- * Locates the slicer executable.
+ * Picks the engine and its binary.
  *
- * Order: an explicit ORCA_SLICER_BIN, then the bundled copy, then anything
- * installed on the machine.
+ * SLICER_ENGINE pins one ("bambu" or "orca"); the default tries Bambu first.
+ * Within an engine: its explicit env override, then the bundled copy, then the
+ * usual install locations.
  */
-function resolveSlicerBin() {
-  if (resolvedBin) return resolvedBin;
+function resolveSlicer() {
+  if (resolved) return resolved;
 
-  // BAMBU_STUDIO_BIN is still honoured: shops that set it before this app
-  // switched engines should not have their override silently ignored.
-  const override = process.env.ORCA_SLICER_BIN || process.env.BAMBU_STUDIO_BIN;
-  if (override) {
-    resolvedBin = override;
-    return resolvedBin;
+  const pinned = String(process.env.SLICER_ENGINE || '').trim().toLowerCase();
+  const order = ENGINES[pinned] ? [pinned] : ENGINE_ORDER;
+
+  for (const key of order) {
+    const engine = ENGINES[key];
+
+    const override = process.env[engine.env];
+    if (override) return (resolved = { engine: key, label: engine.label, bin: override, vendored: false });
+
+    const bundled = vendoredBin(key);
+    if (bundled) return (resolved = { engine: key, label: engine.label, bin: bundled, vendored: true });
+
+    const found = engine.candidates.find(executable);
+    if (found) return (resolved = { engine: key, label: engine.label, bin: found, vendored: false });
   }
 
-  const vendored = vendoredBin();
-  if (vendored) {
-    resolvedBin = vendored;
-    resolvedFromVendor = true;
-    return resolvedBin;
-  }
-
-  // Used by the release build's post-install check: without it, a trim that
-  // broke the bundled copy would fall through to an installed one and report a
-  // pass the shipped folder cannot reproduce.
+  /*
+   * Used by the release build's post-install check: without it a trim that
+   * broke the bundled copy would fall through to an installed one and report a
+   * pass the shipped folder cannot reproduce.
+   */
   if (process.env.VENDOR_ONLY === '1') {
-    resolvedBin = path.join(VENDOR_DIR, 'orcaslicer', '(not bundled)');
-    return resolvedBin;
+    const key = ENGINES[pinned] ? pinned : 'orca';
+    return (resolved = {
+      engine: key, label: ENGINES[key].label, vendored: false,
+      bin: path.join(VENDOR_DIR, ENGINES[key].vendorDir, '(not bundled)'),
+    });
   }
 
-  for (const candidate of CANDIDATE_PATHS) {
-    try {
-      fsSync.accessSync(candidate, fsSync.constants.X_OK);
-      resolvedBin = candidate;
-      return resolvedBin;
-    } catch { /* keep looking */ }
-  }
-
-  // Last resort: hope it's on PATH.
-  resolvedBin = 'orca-slicer';
-  return resolvedBin;
+  // Last resort: hope one is on PATH.
+  const key = ENGINES[pinned] ? pinned : 'orca';
+  return (resolved = {
+    engine: key, label: ENGINES[key].label, vendored: false,
+    bin: key === 'bambu' ? 'bambu-studio' : 'orca-slicer',
+  });
 }
 
-/** True once resolveSlicerBin() has settled on the copy inside vendor/. */
-function usingVendoredSlicer() {
-  resolveSlicerBin();
-  return resolvedFromVendor;
+function resolveSlicerBin() { return resolveSlicer().bin; }
+
+/** True once resolveSlicer() has settled on the copy inside vendor/. */
+function usingVendoredSlicer() { return resolveSlicer().vendored; }
+
+/**
+ * The engine a quote may be answered with.
+ *
+ * REQUIRE_ENGINE=bambu makes the service refuse rather than answer with a
+ * different program. A quote that silently changes by a few percent depending
+ * on which binary happened to be installed is worse than no quote: nothing on
+ * screen would say which one the customer got.
+ */
+function engineRefused() {
+  const required = String(process.env.REQUIRE_ENGINE || '').trim().toLowerCase();
+  if (!required || !ENGINES[required]) return null;
+  const got = resolveSlicer();
+  if (got.engine === required) return null;
+  return `This service is configured to quote with ${ENGINES[required].label}, ` +
+    `and it is not available (found ${got.label}).`;
 }
 
 class SliceError extends Error {
@@ -289,10 +334,12 @@ const FILAMENT_PROFILES = {
 };
 
 function profilePaths(material = 'PLA') {
-  const machine = process.env.MACHINE_PROFILE || path.join(PROFILE_DIR, 'p2s_machine.json');
-  const process_ = process.env.PROCESS_PROFILE || path.join(PROFILE_DIR, 'p2s_process.json');
+  // Each engine reads the set built for it; see build-profiles.js.
+  const dir = ENGINES[resolveSlicer().engine].profileDir;
+  const machine = process.env.MACHINE_PROFILE || path.join(dir, 'p2s_machine.json');
+  const process_ = process.env.PROCESS_PROFILE || path.join(dir, 'p2s_process.json');
   const file = FILAMENT_PROFILES[material] || FILAMENT_PROFILES.PLA;
-  const filament = process.env.FILAMENT_PROFILE || path.join(PROFILE_DIR, file);
+  const filament = process.env.FILAMENT_PROFILE || path.join(dir, file);
   return { machine, process: process_, filament };
 }
 
@@ -686,6 +733,13 @@ async function readEmbeddedSliceInfo(modelPath) {
  * @returns {Promise<object>} parsed stats plus raw slicer output
  */
 async function sliceModel(modelPath, opts = {}) {
+  const refused = engineRefused();
+  if (refused) {
+    throw new SliceError(
+      'Exact pricing is temporarily unavailable. Please try again shortly.',
+      { code: 'ENGINE_UNAVAILABLE', detail: refused }
+    );
+  }
   const profiles = await assertProfilesExist(opts.material);
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vibes-slice-'));
   const outputPath = path.join(workDir, 'output.gcode.3mf');
@@ -845,15 +899,18 @@ async function slicerAvailable() {
  * guidance at startup instead of failing on the first customer request.
  */
 async function diagnostics() {
-  const bin = resolveSlicerBin();
-  const slicerVendored = usingVendoredSlicer();
+  const engine = resolveSlicer();
+  const bin = engine.bin;
+  const slicerVendored = engine.vendored;
   const slicerFound = await slicerAvailable();
+  const refused = engineRefused();
 
   const paths = profilePaths();
+  const dir = ENGINES[engine.engine].profileDir;
   // Report each material's filament profile, so a missing ASA export shows up
   // at startup rather than on the first ASA order.
   for (const [material, file] of Object.entries(FILAMENT_PROFILES)) {
-    paths['filament:' + material] = path.join(PROFILE_DIR, file);
+    paths['filament:' + material] = path.join(dir, file);
   }
   delete paths.filament;
 
@@ -884,11 +941,14 @@ async function diagnostics() {
 
   return {
     slicerBin: bin,
+    slicerEngine: engine.engine,
+    slicerLabel: engine.label,
     slicerFound,
     slicerVendored,
+    engineRefused: refused,
     profiles,
     missingProfiles,
-    ready: slicerFound && missingProfiles.length === 0,
+    ready: slicerFound && missingProfiles.length === 0 && !refused,
   };
 }
 
@@ -898,7 +958,9 @@ module.exports = {
   slicerAvailable,
   diagnostics,
   resolveSlicerBin,
+  resolveSlicer,
   usingVendoredSlicer,
+  engineRefused,
   inspectPaint,
   convertPaintAttributes,
   SliceError,

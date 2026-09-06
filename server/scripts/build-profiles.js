@@ -26,17 +26,22 @@
  *
  *   So each chain is resolved here and the complete configuration written out.
  *
- * WHY THE MACHINE G-CODE COMES FROM ORCASLICER
- *   Bambu's start/end G-code uses template variables that only Bambu Studio
- *   defines — `filament_type[initial_no_support_filament_id]` among them — and
- *   OrcaSlicer refuses to parse them ("Not a variable name", return -100).
- *   These files are never printed; they exist to produce a weight and a time.
- *   So the G-code blocks are taken from OrcaSlicer's own profile for the same
- *   printer, and every setting that actually moves the numbers — layer height,
- *   walls, infill, speeds, temperatures, flow, filament density — comes from
- *   Bambu. Measured cost of the swap on a 40mm PLA cube: 20.37 g against
- *   20.62 g, about 1%, and it is the difference between quoting and not
- *   quoting at all.
+ * TWO SETS, BECAUSE THERE ARE TWO ENGINES
+ *   `server/profiles/`      Bambu's presets exactly as Bambu wrote them. This
+ *                           is the canonical set and what production slices
+ *                           with, because production runs Bambu Studio.
+ *   `server/profiles/orca/` the same settings, adapted so OrcaSlicer will
+ *                           accept them. Only the dev fallback uses these.
+ *
+ *   OrcaSlicer needs two changes and refuses the job without them. Bambu's
+ *   start/end G-code uses template variables only Bambu Studio defines
+ *   (`filament_type[initial_no_support_filament_id]`), which Orca rejects with
+ *   "Not a variable name", return -100 — so the Orca set takes those blocks
+ *   from Orca's own profile for the same printer. And Bambu's "auto" for
+ *   tree_support_wall_count is -1, which Orca validates out of range.
+ *
+ *   Neither change touches a setting that moves the numbers. Measured on the
+ *   same models, the two engines agree to within 1%.
  */
 
 const fs = require('fs');
@@ -70,6 +75,8 @@ const GCODE_KEYS = [
  * Values Bambu accepts that OrcaSlicer rejects outright, with the replacement
  * and the reason. A slice dies on these rather than degrading, so each one is
  * a hard blocker discovered by running the slice.
+ *
+ * Applied only to the OrcaSlicer set. The Bambu set keeps Bambu's own values.
  */
 const VALUE_FIXES = {
   process: {
@@ -252,6 +259,29 @@ function valueOf(flag) {
   return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : null;
 }
 
+/** Adapts a profile so OrcaSlicer will accept it. Returns what changed. */
+function adaptForOrca(json, kind, preset, orcaIndex) {
+  const notes = [];
+
+  if (kind === 'machine') {
+    const src = flatten(orcaIndex, 'machine', preset).json;
+    let swapped = 0;
+    for (const k of GCODE_KEYS) {
+      if (src[k] !== undefined) { json[k] = src[k]; swapped++; }
+      else delete json[k];
+    }
+    notes.push(`${swapped} G-code blocks from Orca`);
+  }
+
+  for (const [key, rule] of Object.entries(VALUE_FIXES[kind] || {})) {
+    if (String(json[key]) === rule.from) {
+      json[key] = rule.to;
+      notes.push(`${key} ${rule.from} -> ${rule.to}`);
+    }
+  }
+  return notes;
+}
+
 function main() {
   const bambuDir = firstUsable(bambuCandidates(valueOf('--from')));
   if (!bambuDir) {
@@ -263,48 +293,31 @@ function main() {
   }
 
   const orcaDir = firstUsable(orcaCandidates(valueOf('--orca')), ['machine']);
-  if (!orcaDir) {
-    console.error('\n  Could not find OrcaSlicer\'s preset tree (for the machine G-code).');
-    console.error('  Run "node setup.js" first, or pass --orca <resources/profiles>.\n');
-    process.exit(1);
-  }
+  const orcaOut = path.join(OUT_DIR, 'orca');
 
   console.log('\n  Bambu presets:  ' + bambuDir);
-  console.log('  Orca presets:   ' + orcaDir + '\n');
+  console.log('  Orca presets:   ' + (orcaDir || '(none - skipping the OrcaSlicer set)') + '\n');
 
   const bambu = indexTree(bambuDir);
-  const orca = indexTree(orcaDir);
+  const orca = orcaDir ? indexTree(orcaDir) : null;
   fs.mkdirSync(OUT_DIR, { recursive: true });
+  if (orca) fs.mkdirSync(orcaOut, { recursive: true });
 
   for (const t of TARGETS) {
     const { json, chain } = flatten(bambu, t.kind, t.preset);
-
-    if (t.kind === 'machine') {
-      // Orca's G-code for the same printer, because Bambu's will not parse.
-      const src = flatten(orca, 'machine', t.preset).json;
-      let swapped = 0;
-      for (const k of GCODE_KEYS) {
-        if (src[k] !== undefined) { json[k] = src[k]; swapped++; }
-        else delete json[k];
-      }
-      console.log(`  ${t.out.padEnd(20)} ${Object.keys(json).length} keys, ${swapped} G-code blocks from Orca`);
-    } else {
-      console.log(`  ${t.out.padEnd(20)} ${Object.keys(json).length} keys`);
-    }
-
-    const fixes = VALUE_FIXES[t.kind] || {};
-    for (const [key, rule] of Object.entries(fixes)) {
-      if (String(json[key]) === rule.from) {
-        json[key] = rule.to;
-        console.log(`  ${''.padEnd(20)} fixed ${key}: ${rule.from} -> ${rule.to}`);
-      }
-    }
-
-    console.log(`  ${''.padEnd(20)} ${chain.join(' <- ')}`);
+    console.log(`  ${t.out.padEnd(20)} ${Object.keys(json).length} keys   ${chain.join(' <- ')}`);
     fs.writeFileSync(path.join(OUT_DIR, t.out), JSON.stringify(json, null, 2) + '\n');
+
+    if (!orca) continue;
+    const adapted = JSON.parse(JSON.stringify(json));
+    const notes = adaptForOrca(adapted, t.kind, t.preset, orca);
+    if (notes.length) console.log(`  ${''.padEnd(20)} orca/: ${notes.join(', ')}`);
+    fs.writeFileSync(path.join(orcaOut, t.out), JSON.stringify(adapted, null, 2) + '\n');
   }
 
-  console.log('\n  Wrote ' + TARGETS.length + ' profiles to ' + OUT_DIR);
+  console.log('\n  Wrote ' + TARGETS.length + ' Bambu Studio profiles to ' + OUT_DIR);
+  if (orca) console.log('  Wrote ' + TARGETS.length + ' OrcaSlicer profiles to ' + orcaOut);
+  else console.log('  No OrcaSlicer set written - pass --orca <resources/profiles> to build it.');
   console.log('  Verify with a real slice:  node server/scripts/verify-profiles.js\n');
 }
 
