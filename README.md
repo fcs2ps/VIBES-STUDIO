@@ -8,7 +8,7 @@ orient it against a Bambu Lab P2S build volume, and get a price computed from a
 index.html  style.css  bundle.js     the site (static, no build step to run it)
 src/main.js                          frontend source
 server/                              the quoting service (see server/README.md)
-setup.js                             bundles Node + OrcaSlicer into vendor/
+setup.js                             points this checkout at a slicer
 make-release.js                      builds the zip you hand to someone else
 vendor/                              generated — the app's own copies of both
 ```
@@ -45,33 +45,44 @@ refuses to produce a zip that would fail on the far end.
 
 The result is about 90 MB zipped and 242 MB unpacked.
 
-### What is bundled, and why it is OrcaSlicer
+### Which slicer runs, and how it gets there
 
-`node setup.js` fetches two things, verifies each against a pinned SHA-256, and
-unpacks them into `vendor/`:
+**If Bambu Studio is installed on your machine, this uses it.** Nothing is
+downloaded and nothing is bundled — it is the same program the shop prints
+with, so your quotes are production's quotes.
 
-1. **Node.js**, so the folder does not need one installed.
-2. **OrcaSlicer**, the slicing engine, trimmed from 415 MB to 163 MB by dropping
-   GUI-only assets and the print profiles for the 60-odd printer vendors this
-   app never slices for.
+```bash
+node setup.js      # finds Bambu Studio, slices a test cube, done (seconds)
+node start.js
+```
 
-Bambu Studio ships only as a GUI installer, so no folder can carry it — that is
-why the previous version of this app had to copy Bambu Studio off whatever
-machine it ran on, and why a machine without it reported *"The slicing engine
-isn't installed on the server yet."* OrcaSlicer is a fork of Bambu Studio that
-takes the same command-line flags and publishes a portable build, so it can
-travel inside the folder.
+A fresh `git clone` works without even that: the service looks for Bambu Studio
+in the usual install locations on its own. `setup.js` just makes the choice
+explicit, records it in `vendor/MANIFEST.json`, and proves it with a real slice
+so you find out now rather than on the first customer.
 
-**The prices still come from Bambu's numbers.** The profiles are built from
-Bambu Studio's own P2S presets — see the next section. OrcaSlicer is the engine
-that reads them, not the source of the settings.
+Point it somewhere unusual with `node setup.js --from "D:\Tools\Bambu Studio"`,
+or set `BAMBU_STUDIO_BIN`.
 
-Setup finishes by slicing a test cube through the bundled copy and printing the
-price, so it proves the folder works rather than reporting that files were
-copied. `node setup.js --check` reports what's bundled; `--force` rebuilds it.
+**If Bambu Studio is not installed**, setup falls back to downloading and
+bundling **OrcaSlicer**, so the folder still runs on a machine with nothing on
+it. This is what a released zip carries, because Bambu Studio ships only as an
+installer and cannot be redistributed.
 
-See **`vendor/README.md`** for what's inside, what the trim drops and why, and
-the AGPL obligations that come with handing the folder to someone else.
+That fallback is close, not identical. Measured against Bambu Studio on the
+same models: the model weight agrees within about 1%, but on a multi-colour job
+OrcaSlicer builds a different prime tower and came out 47% heavy on it — 77 g
+against 52 g, roughly $15 on one print. Fine for developing the site against.
+Not what you want quoting a customer.
+
+`node setup.js --check` says which one this checkout is using. So does the
+startup banner, and `/api/health` reports `slicerEngine`.
+
+| | Development | Production |
+|---|---|---|
+| Engine | Bambu Studio if installed, else bundled OrcaSlicer | Bambu Studio, always |
+| Where | your machine | container — see **Cloud hosting** |
+| If Bambu is missing | falls back, and says so | refuses to quote (`REQUIRE_ENGINE=bambu`) |
 
 ### Printer profiles ship with the app
 

@@ -6,47 +6,50 @@ echo.
 echo   Starting Vibes 3D Studio...
 echo.
 
-rem This folder carries its own Node and its own slicer. Nothing has to be
-rem installed on the machine, and nothing is downloaded on first run.
+rem Node: the bundled copy in a released zip, otherwise whatever is installed.
+rem A developer checkout has no vendor\ and does not need one.
 set "NODE=%~dp0vendor\node\node.exe"
 if exist "%NODE%" goto :haveNode
 
-rem Only reached if vendor\ is missing - an incomplete unzip, or someone
-rem deleted it. Fall back to an installed Node just so setup can repair it.
 where node >nul 2>nul
 if not errorlevel 1 (
   set "NODE=node"
-  goto :repair
+  goto :haveNode
 )
 
 echo   ------------------------------------------------------------
-echo   This copy is incomplete.
+echo   Node.js is needed to run this.
 echo   ------------------------------------------------------------
 echo.
-echo   vendor\node\node.exe is missing, so this folder cannot start.
-echo   That normally means the zip was only partly unpacked.
+echo   Install it once from https://nodejs.org (the LTS button),
+echo   then double-click this file again.
 echo.
-echo   Unzip the whole folder again and run this from the unzipped
-echo   copy - not from inside the .zip window.
+echo   If you unzipped a release and are seeing this, the zip was
+echo   only partly unpacked - unzip the whole folder again.
 echo.
 pause
+start "" https://nodejs.org/en/download
 exit /b 1
 
-:repair
-echo   vendor\ is missing - rebuilding it. This needs internet access
-echo   and takes a minute, once.
-echo.
-"%NODE%" setup.js
-if errorlevel 1 (
-  echo.
-  echo   Setup could not repair this folder. Ask for a fresh zip.
-  echo.
-  pause
-  exit /b 1
-)
-set "NODE=%~dp0vendor\node\node.exe"
-
 :haveNode
+
+rem First run in a fresh checkout: work out which slicer this machine quotes
+rem with. If Bambu Studio is installed it takes a couple of seconds and nothing
+rem is downloaded. Released zips already carry their answer and skip this.
+if not exist "%~dp0vendor\MANIFEST.json" (
+  echo   First run - finding the slicer on this machine.
+  echo.
+  "%NODE%" setup.js
+  if errorlevel 1 (
+    echo.
+    echo   Setup could not find or configure a slicer. See the message above.
+    echo.
+    pause
+    exit /b 1
+  )
+  echo.
+)
+
 "%NODE%" start.js
 
 echo.

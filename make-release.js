@@ -286,7 +286,10 @@ function main() {
       fs.copyFileSync(path.join(cache, f), path.join(stage, 'vendor', '.cache', f));
     }
   }
-  run(process.execPath, [path.join(stage, 'setup.js'), '--platform', OPT.platform, '--force'],
+  // --bundle-orca, not "whatever this machine has": a zip that goes to someone
+  // else must carry its own slicer, and Bambu Studio cannot be redistributed.
+  run(process.execPath,
+    [path.join(stage, 'setup.js'), '--platform', OPT.platform, '--force', '--bundle-orca'],
     { cwd: stage });
 
   // The download cache is a build artifact, not part of the app.

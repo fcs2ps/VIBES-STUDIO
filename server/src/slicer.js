@@ -80,21 +80,28 @@ function executable(p) {
 }
 
 /**
- * The engine bundled in vendor/, if it is the one asked for.
+ * The engine `setup.js` configured for this checkout, if it is the one asked
+ * for.
  *
- * The manifest records which engine was bundled and where its binary landed,
- * which differs by platform (a bare .exe, an .app bundle, an extracted
- * AppImage). Reading it beats re-deriving the layout and drifting out of step
- * with whatever produced the folder.
+ * vendor/MANIFEST.json is the record of what setup found. It may point at a
+ * copy bundled inside vendor/ (a released zip) or at a Bambu Studio installed
+ * on the machine (a developer's checkout) — `bin` is relative to vendor/ in the
+ * first case and absolute in the second, which is how they are told apart.
  */
-function vendoredBin(engineKey) {
+function manifestBin(engineKey) {
   try {
     const manifest = JSON.parse(fsSync.readFileSync(path.join(VENDOR_DIR, 'MANIFEST.json'), 'utf8'));
     const slicer = manifest.slicer || {};
-    const name = String(slicer.name || '').toLowerCase();
-    if (!name.includes(engineKey === 'bambu' ? 'bambu' : 'orca')) return null;
-    const bin = path.join(VENDOR_DIR, slicer.bin);
-    return executable(bin) ? bin : null;
+
+    // `engine` is explicit in current manifests; older ones only named the
+    // program, so fall back to reading the name.
+    const engine = slicer.engine
+      || (String(slicer.name || '').toLowerCase().includes('bambu') ? 'bambu' : 'orca');
+    if (engine !== engineKey || !slicer.bin) return null;
+
+    const bin = path.isAbsolute(slicer.bin) ? slicer.bin : path.join(VENDOR_DIR, slicer.bin);
+    if (!executable(bin)) return null;
+    return { bin, vendored: !path.isAbsolute(slicer.bin) };
   } catch {
     return null;
   }
@@ -121,8 +128,12 @@ function resolveSlicer() {
     const override = process.env[engine.env];
     if (override) return (resolved = { engine: key, label: engine.label, bin: override, vendored: false });
 
-    const bundled = vendoredBin(key);
-    if (bundled) return (resolved = { engine: key, label: engine.label, bin: bundled, vendored: true });
+    const configured = manifestBin(key);
+    if (configured) {
+      return (resolved = {
+        engine: key, label: engine.label, bin: configured.bin, vendored: configured.vendored,
+      });
+    }
 
     const found = engine.candidates.find(executable);
     if (found) return (resolved = { engine: key, label: engine.label, bin: found, vendored: false });

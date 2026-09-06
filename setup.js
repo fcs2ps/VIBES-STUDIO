@@ -36,7 +36,9 @@
  *   the engine that reads them, not the source of the settings.
  *
  * USAGE
- *   node setup.js                     fetch and vendor for this platform
+ *   node setup.js                     use Bambu Studio if installed, else fetch Orca
+ *   node setup.js --from "<path>"     use the Bambu Studio at this path
+ *   node setup.js --bundle-orca       always bundle OrcaSlicer (release builds)
  *   node setup.js --platform win32    vendor for Windows (cross-building)
  *   node setup.js --check             report what is vendored, change nothing
  *   node setup.js --force             rebuild vendor/ from scratch
@@ -152,6 +154,8 @@ const OPT = {
   full: has('--full'),
   quiet: has('--quiet'),
   skipVerify: has('--skip-verify'),
+  bundleOrca: has('--bundle-orca'),
+  from: valueOf('--from'),
 };
 
 const line = (char = '-', n = 66) => char.repeat(n);
@@ -421,6 +425,92 @@ Bambu Studio. They are configuration data, not part of OrcaSlicer.
 
 /* =============================================================== reporting == */
 
+/* ============================================ Bambu Studio on this machine == */
+
+/**
+ * Where Bambu Studio puts its executable when installed the ordinary way.
+ *
+ * A developer who already prints from Bambu Studio should not have to download
+ * a second slicer to run this, and more to the point should not get quotes from
+ * one: production prices with Bambu Studio, so a checkout that prices with
+ * something else is a checkout that disagrees with production.
+ */
+function bambuCandidates() {
+  const home = os.homedir();
+  if (process.platform === 'win32') {
+    return [
+      'C:\\Program Files\\Bambu Studio\\bambu-studio.exe',
+      'C:\\Program Files (x86)\\Bambu Studio\\bambu-studio.exe',
+      path.join(home, 'AppData', 'Local', 'Programs', 'Bambu Studio', 'bambu-studio.exe'),
+    ];
+  }
+  if (process.platform === 'darwin') {
+    return [
+      '/Applications/BambuStudio.app/Contents/MacOS/BambuStudio',
+      '/Applications/Bambu Studio.app/Contents/MacOS/BambuStudio',
+      path.join(home, 'Applications', 'BambuStudio.app', 'Contents', 'MacOS', 'BambuStudio'),
+    ];
+  }
+  return [
+    '/opt/bambu-studio/AppRun',
+    '/usr/local/bin/bambu-studio',
+    '/usr/bin/bambu-studio',
+    path.join(home, 'Applications', 'BambuStudio.AppImage'),
+  ];
+}
+
+function isExecutable(p) {
+  try { fs.accessSync(p, fs.constants.X_OK); return true; } catch { return false; }
+}
+
+/**
+ * Resolves whatever the user pointed --from at: the executable itself, an
+ * install folder, or a macOS .app bundle.
+ */
+function resolveFrom(given) {
+  const p = path.resolve(given);
+  if (isExecutable(p) && fs.statSync(p).isFile()) return p;
+  const inside = [
+    path.join(p, 'bambu-studio.exe'),
+    path.join(p, 'AppRun'),
+    path.join(p, 'Contents', 'MacOS', 'BambuStudio'),
+  ];
+  return inside.find(isExecutable) || null;
+}
+
+function findBambuStudio() {
+  if (OPT.from) return resolveFrom(OPT.from);
+  if (process.env.BAMBU_STUDIO_BIN && isExecutable(process.env.BAMBU_STUDIO_BIN)) {
+    return process.env.BAMBU_STUDIO_BIN;
+  }
+  return bambuCandidates().find(isExecutable) || null;
+}
+
+/** Points this checkout at an already-installed Bambu Studio. Nothing downloads. */
+function useInstalledBambu(bin) {
+  fs.mkdirSync(VENDOR, { recursive: true });
+  fs.writeFileSync(MANIFEST, JSON.stringify({
+    createdAt: new Date().toISOString(),
+    platform: `${process.platform}-${process.arch}`,
+    node: { bin: null, version: process.version, system: true },
+    slicer: {
+      name: 'Bambu Studio',
+      engine: 'bambu',
+      bin,                       // absolute: installed, not bundled
+      vendored: false,
+      source: 'installed on this machine',
+    },
+  }, null, 2) + '\n');
+
+  say('\n' + line());
+  say('  VIBES 3D STUDIO - SETUP');
+  say(line());
+  say('\n  Found Bambu Studio already installed:');
+  say(`    ${bin}\n`);
+  say('  Using it. Nothing to download - this is the same program the shop');
+  say('  prints with, so your quotes match production.\n');
+}
+
 function readManifest() {
   try { return JSON.parse(fs.readFileSync(MANIFEST, 'utf8')); } catch { return null; }
 }
@@ -434,15 +524,29 @@ function report() {
     console.log('  Nothing bundled yet. Run:  node setup.js\n');
     return 1;
   }
-  const nodeBin = path.join(VENDOR, m.node.bin);
-  const slicerBin = path.join(VENDOR, m.slicer.bin);
-  const ok = (p) => (fs.existsSync(p) ? '[ok]' : '[--]');
-  console.log(`  ${ok(nodeBin)}  Node ${m.node.version}`);
-  console.log(`        ${nodeBin}`);
-  console.log(`  ${ok(slicerBin)}  OrcaSlicer ${m.slicer.version} (${m.slicer.trimmed ? 'trimmed' : 'full'}, ${mb(m.slicer.bytes)})`);
+  const ok = (p) => (p && fs.existsSync(p) ? '[ok]' : '[--]');
+  const slicerBin = path.isAbsolute(m.slicer.bin) ? m.slicer.bin : path.join(VENDOR, m.slicer.bin);
+  const detail = m.slicer.vendored === false
+    ? 'installed on this machine'
+    : `bundled, ${m.slicer.trimmed ? 'trimmed' : 'full'}, ${mb(m.slicer.bytes || 0)}`;
+  console.log(`  ${ok(slicerBin)}  ${m.slicer.name}${m.slicer.version ? ' ' + m.slicer.version : ''} (${detail})`);
   console.log(`        ${slicerBin}`);
-  console.log(`\n  Built ${m.createdAt} for ${m.platform}\n`);
-  const healthy = fs.existsSync(nodeBin) && fs.existsSync(slicerBin);
+
+  const nodeBin = m.node && m.node.bin ? path.join(VENDOR, m.node.bin) : null;
+  if (nodeBin) {
+    console.log(`  ${ok(nodeBin)}  Node ${m.node.version}`);
+    console.log(`        ${nodeBin}`);
+  } else {
+    console.log(`  [ok]  Node ${m.node ? m.node.version : process.version} (this machine's)`);
+  }
+
+  console.log(`\n  Configured ${m.createdAt} for ${m.platform}\n`);
+  if (m.slicer.engine !== 'bambu') {
+    console.log('  Note: quotes from OrcaSlicer are close but not identical to');
+    console.log('  Bambu Studio. Install Bambu Studio and re-run setup to match');
+    console.log('  production exactly.\n');
+  }
+  const healthy = fs.existsSync(slicerBin) && (!nodeBin || fs.existsSync(nodeBin));
   if (!healthy) console.log('  Something is missing. Re-run:  node setup.js --force\n');
   return healthy ? 0 : 1;
 }
@@ -461,9 +565,54 @@ async function main() {
 
   if (readManifest() && !OPT.force) {
     console.log('\n  Already set up. Nothing to do.');
-    console.log('  Re-run with --force to rebuild vendor/ from scratch.');
+    console.log('  Re-run with --force to configure again.');
     report();
     process.exit(0);
+  }
+
+  /*
+   * The fast path, and the accurate one: if Bambu Studio is already on this
+   * machine, point at it and stop. No download, no bundling, and the quotes
+   * match production because it is the same program the shop prints with.
+   *
+   * Release builds skip this with --bundle-orca: a zip that goes to someone
+   * else has to carry its own slicer, and it cannot carry Bambu Studio.
+   */
+  if (!OPT.bundleOrca && OPT.platform === process.platform) {
+    const bambu = findBambuStudio();
+    if (bambu) {
+      useInstalledBambu(bambu);
+      if (!OPT.skipVerify) {
+        say('  Checking that a real slice runs through it...\n');
+        try {
+          execFileSync(process.execPath, [path.join(ROOT, 'server', 'scripts', 'verify-profiles.js')], {
+            stdio: OPT.quiet ? 'ignore' : 'inherit',
+            env: { ...process.env, SLICER_ENGINE: 'bambu', BAMBU_STUDIO_BIN: bambu },
+          });
+        } catch {
+          console.error('\n  Bambu Studio was found but the test slice failed.');
+          console.error('  Check it opens normally, then run setup again.\n');
+          process.exit(1);
+        }
+      }
+      say('\n' + line());
+      say('  READY');
+      say(line());
+      say('\n  Start it with:  node start.js\n');
+      return;
+    }
+
+    if (OPT.from) {
+      fail(`No Bambu Studio executable under "${OPT.from}".`, [
+        'Point --from at the folder holding bambu-studio.exe (Windows),',
+        'the BambuStudio.app bundle (macOS), or the AppRun/AppImage (Linux).',
+      ]);
+    }
+
+    say('\n  Bambu Studio is not installed on this machine.');
+    say('  Falling back to bundling OrcaSlicer, which is close but not');
+    say('  identical. Install Bambu Studio and re-run setup to match');
+    say('  production exactly.\n');
   }
 
   say('\n' + line());
