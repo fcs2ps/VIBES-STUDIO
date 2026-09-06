@@ -481,6 +481,43 @@ async function writePaintFilaments(filamentProfile, count, workDir) {
   return paths;
 }
 
+/*
+ * How much filament one colour change wastes, in mm3.
+ *
+ * Left to itself the slicer derives a flush volume per colour pair from the
+ * two colours, which is right in a GUI where the operator has chosen real
+ * colours and wrong here: the colours we assign are placeholders, so the
+ * matrix it computes is a number about nothing. A flat value is both more
+ * honest and more accurate.
+ *
+ * 280 mm3 is Bambu Studio's stock figure for PLA, and it is what the shop's
+ * own slices come out at: 346.85 g of purge over 996 changes on the painted
+ * figurine is 276 mm3 a change. Slicing the same model with a flat 280 gives
+ * 346.24 g against that 346.85 g.
+ */
+const FLUSH_VOLUME_MM3 = 280;
+
+/**
+ * Writes a process profile carrying a flush matrix the size of the palette.
+ *
+ * The matrix has one entry per ordered pair of filaments, so its size depends
+ * on how many colours this particular model uses and it cannot live in the
+ * profile on disk.
+ */
+async function writePaintProcess(processProfile, count, workDir) {
+  const base = JSON.parse(await fs.readFile(processProfile, 'utf8'));
+  const matrix = [];
+  for (let i = 0; i < count; i++) {
+    for (let j = 0; j < count; j++) {
+      matrix.push(i === j ? '0' : String(FLUSH_VOLUME_MM3));
+    }
+  }
+  base.flush_volumes_matrix = matrix;
+  const file = path.join(workDir, 'process_painted.json');
+  await fs.writeFile(file, JSON.stringify(base, null, 2));
+  return file;
+}
+
 /** Evenly spaced, fully saturated colours - only their distinctness matters. */
 function hslHex(hue) {
   const f = (n) => {
@@ -653,8 +690,12 @@ async function sliceModel(modelPath, opts = {}) {
       ? await writePaintFilaments(profiles.filament, paint.colorCount, workDir)
       : [profiles.filament];
 
+    const processProfile = paint.painted
+      ? await writePaintProcess(profiles.process, paint.colorCount, workDir)
+      : profiles.process;
+
     const args = useProjectSettings ? [] : [
-      '--load-settings', `${profiles.machine};${profiles.process}`,
+      '--load-settings', `${profiles.machine};${processProfile}`,
       '--load-filaments', filaments.join(';'),
       // Place the part on the plate. Note we deliberately do NOT pass
       // --orient: the customer already chose an orientation in the viewer,

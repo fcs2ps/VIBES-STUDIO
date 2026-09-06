@@ -73,9 +73,16 @@ const GCODE_KEYS = [
  */
 const VALUE_FIXES = {
   process: {
-    // Bambu uses -1 for "auto"; Orca validates this to [0,2] and aborts with
-    // "tree_support_wall_count: -1 not in range". 0 is Orca's own default.
-    tree_support_wall_count: { from: '-1', to: '0' },
+    /*
+     * Bambu uses -1 for "auto"; OrcaSlicer validates this to [0,2] and aborts
+     * with "tree_support_wall_count: -1 not in range".
+     *
+     * Which legal value stands in for "auto" is not arbitrary — it moves the
+     * number. Measured against Bambu Studio's own tree support on the same
+     * two models: 0 gave +73% support on the lego figure and +53% on the
+     * figurine, 2 gave +102%, and 1 gave +43% and +9%. So 1 it is.
+     */
+    tree_support_wall_count: { from: '-1', to: '1' },
   },
 };
 
@@ -103,6 +110,23 @@ const PROCESS_DEFAULTS = {
    */
   wipe_tower_x: ['200'],
   wipe_tower_y: ['200'],
+
+  /*
+   * Supports on. Bambu's stock "0.20mm Standard @BBL P2S" ships with them off,
+   * but the shop prints with them on, and a quote has to match the shop rather
+   * than the preset: a figurine that needs support and is priced without it is
+   * priced under. Type and threshold stay as Bambu's — tree(auto) at 30 deg.
+   */
+  enable_support: '1',
+
+  /*
+   * How much filament a colour change wastes, as a multiple of the flush
+   * volume. OrcaSlicer defaults this to 0.3; Bambu does not, and the gap is
+   * most of a multi-colour quote. On the painted figurine, 0.3 produced 149 g
+   * of purge against Bambu Studio's 347 g — under by 197 g, about $118 of PLA
+   * the shop would have eaten.
+   */
+  flush_multiplier: ['1.0'],
 };
 
 /* ------------------------------------------------------------------ index -- */
