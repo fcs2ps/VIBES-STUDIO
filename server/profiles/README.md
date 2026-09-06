@@ -11,7 +11,7 @@ Four files, all present and ready to quote against:
 
 These are the **Bambu Lab P2S factory defaults**: `Bambu Lab P2S 0.4 nozzle`,
 `0.20mm Standard @BBL P2S`, `Bambu PLA Basic @BBL P2S` at 1.26 g/cm³. They are
-byte-identical to what `export-profiles.js` produces from a stock Bambu Studio
+byte-identical to what `build-profiles.js` produces from a stock Bambu Studio
 install, so exact pricing works with nothing to set up.
 
 Confirm the whole path works whenever you want:
@@ -28,15 +28,16 @@ profiles are unresolved and every quote is roughly 11% over.
 ## Re-exporting them
 
 Only needed if you change how you actually print — a different layer height,
-infill, wall count or filament. Select it in the Bambu Studio GUI, then:
+infill, wall count or filament. Point `TARGETS` in `build-profiles.js` at the
+preset you want, then:
 
 ```bash
-node ../scripts/export-profiles.js
+node ../scripts/build-profiles.js
 ```
 
 It reads your selection from `BambuStudio.conf` and rewrites these three files
-from the matching vendor profiles — looking first inside `vendor/bambu-studio/`,
-then at an installed Bambu Studio.
+from the matching Bambu presets in `bambu-presets/`, falling back to a Bambu
+Studio data directory if you pass `--from`.
 
 It **refuses** to export a machine that isn't a P2S. The viewer clamps uploads
 to the P2S build volume and the customer is never shown another printer, so
@@ -63,7 +64,7 @@ mattered a great deal:
 Nothing warned about either. The slice succeeded and returned a confident,
 wrong number.
 
-So `export-profiles.js` resolves each chain itself and writes the complete
+So `build-profiles.js` resolves each chain itself and writes the complete
 configuration. Two rules keep that working:
 
 - **Keep the identity keys.** `name`, `inherits`, `from` and `setting_id` come
@@ -78,7 +79,8 @@ configuration. Two rules keep that working:
   silently inherits another manufacturer's wall count.
 
 The trade-off is that these no longer improve on their own when Bambu Studio
-updates. Re-run `export-profiles.js` after an update to pick up changes.
+updates. Refresh `bambu-presets/` from a current Bambu Studio data directory and
+re-run `build-profiles.js` to pick up changes.
 
 ## Why `--export-settings` isn't the answer
 
@@ -92,12 +94,12 @@ prices, and rejects any part over 200mm as off the bed.
 
 `filament_density` decides grams, and grams decide the price. It lives in a
 parent of the leaf profile, so it is one of the keys that only arrives because
-the chain is resolved. Without it Bambu Studio writes
+the chain is resolved. Without it the slicer writes
 `total filament used [g] = 0.00` and the service falls back to computing weight
 from extruded volume — correct, but flagged.
 
 If `/api/health` or a quote response reports `profileMissingDensity: true`, set
-a density in Bambu Studio (Filament → Advanced) and re-run the export.
+a density in Bambu Studio (Filament → Advanced) and rebuild the profiles.
 
 ## The settings you choose here define every quote
 

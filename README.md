@@ -2,88 +2,125 @@
 
 Instant-quote site for a 3D printing service. Customers upload a model, size and
 orient it against a Bambu Lab P2S build volume, and get a price computed from a
-**real Bambu Studio slice** — not a volume estimate.
+**real slice on Bambu's own P2S profiles** — not a volume estimate.
 
 ```
 index.html  style.css  bundle.js     the site (static, no build step to run it)
 src/main.js                          frontend source
 server/                              the quoting service (see server/README.md)
-setup.js                             bundles Node + Bambu Studio into vendor/
+setup.js                             bundles Node + OrcaSlicer into vendor/
+make-release.js                      builds the zip you hand to someone else
 vendor/                              generated — the app's own copies of both
 ```
 
 ## Quick start
 
-**Unzip the folder, then start it:**
+**Unzip the folder, then double-click `START-WINDOWS.bat`.**
 
-Double-click **`START-WINDOWS.bat`**.
+That is the whole procedure. A terminal window opens and your browser opens the
+site automatically at <http://localhost:8080>. Leave that window open while you
+use the site — closing it stops the server.
 
-On the first run the launcher bundles its own copies of Node.js and Bambu Studio
-into `vendor/` — about a minute, once. After that the folder is self-contained:
-no Node on PATH, no Bambu Studio installed, no environment variables, no
-network. Move it to another machine and it still runs.
+A released zip carries Node.js, the slicing engine and the printer profiles
+inside it. Nothing to install, nothing to download, no network needed, no
+first-run setup. Copy the folder to another machine and it still runs.
 
-A terminal window opens and your browser opens the site automatically at
-<http://localhost:8080>. Leave that window open while you use the site —
-closing it stops the server.
+**Windows only.** The launcher and the bundled engine are built for Windows.
+See **`START-HERE.txt`** if double-clicking trips SmartScreen.
 
-**Windows only.** The launcher, and the vendored slicer it sets up, are built
-for Windows. See **`START-HERE.txt`** if double-clicking trips SmartScreen.
+Prefer the command line? `vendor\node\node.exe start.js`, or plain
+`node start.js` if you have Node installed.
 
-Prefer the command line? `node setup.js` then `node start.js` does the same
-thing.
+### Building the zip you send to someone
 
-### What the first run needs
+```bash
+npm install                       # once, for esbuild
+node make-release.js              # -> dist/vibes3d-studio-<version>-win64.zip
+```
 
-Setup copies rather than downloads, so it needs one of each to copy **once**:
+`make-release.js` stages a clean copy of the app, rebuilds the storefront from
+source, bundles a fresh `vendor/` for the target platform, checks the staged
+folder actually contains everything the app needs at runtime, and zips it. It
+refuses to produce a zip that would fail on the far end.
 
-1. **Node.js**, to run `setup.js` itself. Setup copies it into `vendor/node/`,
-   so this is the only run that needs it — after that the launchers use the
-   bundled one. If it's missing, the launcher opens the download page.
-2. **Bambu Studio installed**, from <https://bambulab.com/download>. Setup
-   copies it into `vendor/bambu-studio/`, trimmed from ~780 MB to ~200 MB by
-   dropping the GUI-only assets a headless slice never touches.
+The result is about 90 MB zipped and 242 MB unpacked.
 
-Bambu Studio ships as a GUI installer rather than a portable archive, so there
-is nothing setup could fetch and unpack on its own — and copying a local install
-vendors the version you already print with, which is the version your prices are
-supposed to match.
+### What is bundled, and why it is OrcaSlicer
 
-Setup finishes by slicing a test cube through the vendored copy and printing the
-price, so it proves the folder works rather than just reporting that files were
+`node setup.js` fetches two things, verifies each against a pinned SHA-256, and
+unpacks them into `vendor/`:
+
+1. **Node.js**, so the folder does not need one installed.
+2. **OrcaSlicer**, the slicing engine, trimmed from 415 MB to 163 MB by dropping
+   GUI-only assets and the print profiles for the 60-odd printer vendors this
+   app never slices for.
+
+Bambu Studio ships only as a GUI installer, so no folder can carry it — that is
+why the previous version of this app had to copy Bambu Studio off whatever
+machine it ran on, and why a machine without it reported *"The slicing engine
+isn't installed on the server yet."* OrcaSlicer is a fork of Bambu Studio that
+takes the same command-line flags and publishes a portable build, so it can
+travel inside the folder.
+
+**The prices still come from Bambu's numbers.** The profiles are built from
+Bambu Studio's own P2S presets — see the next section. OrcaSlicer is the engine
+that reads them, not the source of the settings.
+
+Setup finishes by slicing a test cube through the bundled copy and printing the
+price, so it proves the folder works rather than reporting that files were
 copied. `node setup.js --check` reports what's bundled; `--force` rebuilds it.
 
 See **`vendor/README.md`** for what's inside, what the trim drops and why, and
-the AGPL note about handing the folder to someone else.
+the AGPL obligations that come with handing the folder to someone else.
 
 ### Printer profiles ship with the app
 
 `server/profiles/` already contains the **Bambu Lab P2S defaults** — 0.4 mm
-nozzle, 0.20 mm Standard process, Bambu PLA Basic — with every inherited
-setting resolved, so exact pricing works out of the box with nothing to
-configure.
+nozzle, 0.20 mm Standard process, Bambu PLA Basic and Bambu ASA — with every
+inherited setting resolved, so exact pricing works out of the box with nothing
+to configure.
+
+They are built from **Bambu Studio's own presets**, not OrcaSlicer's copies of
+them, so the settings behind a price are the settings the shop prints with. The
+20 Bambu presets they are built from live in `server/profiles/bambu-presets/`
+(78 KB), so the profiles can be rebuilt without a Bambu Studio install.
 
 The resolving matters more than it sounds. `--load-settings` does **not** follow
 a profile's `inherits` chain: only keys written in the file itself reach the
-slicer, and everything else silently falls back to Bambu Studio's generic
+slicer, and everything else silently falls back to the engine's generic
 defaults. Copying the vendor profiles verbatim therefore lost 146 of 198 process
 settings, which meant a **200×200 bed** (so any model wider than ~200 mm was
 rejected) and **20% infill instead of 15%** (so every quote overstated filament
 by about 11%). Nothing warned: the slice succeeded and returned a confident,
-wrong number. `export-profiles.js` now resolves each chain — within the leaf's
-own vendor, because twelve manufacturers ship presets with identical names and
-disagree about them.
+wrong number. `build-profiles.js` resolves each chain in full.
 
-Re-export them only if you change how you actually print:
+Rebuild them only if you change how you actually print:
 
 ```bash
-node server/scripts/export-profiles.js    # reads your Bambu Studio selection
-node server/scripts/verify-profiles.js    # slices a test cube, prints the price
+node server/scripts/build-profiles.js     # resolve Bambu's presets
+node server/scripts/verify-profiles.js    # slice a test cube, print the price
 ```
 
-The export refuses to overwrite the P2S profiles with a different printer's,
-since the viewer clamps models to the P2S build volume and the customer is never
-shown anything else. `--allow-other-printer` overrides it.
+Three things `build-profiles.js` handles that the old export did not, each
+found by running a slice rather than by reading the files:
+
+- **The machine G-code was truncated.** Bambu keeps the long start/end G-code in
+  sibling presets named `<machine> template <key>`, which nothing references by
+  path. The old export missed them, so `machine_start_gcode` was 577 characters
+  of a real 11,543.
+- **Supports were switched on.** The exported process profile had
+  `enable_support: 1`; Bambu's stock *0.20mm Standard @BBL P2S* has it off. Every
+  quote was pricing supports the customer never asked for.
+- **ASA could not be sliced at all.** With no `curr_bed_type`, the engine
+  defaults to a Cool Plate, which ASA is not allowed on, and the job fails
+  outright with *"Cool Plate does not support filament 1"*. It is now set to
+  Textured PEI, the plate that takes PLA and ASA both.
+
+The machine start/end G-code is taken from OrcaSlicer's profile for the same
+printer rather than Bambu's, because Bambu's uses template variables only Bambu
+Studio defines and OrcaSlicer refuses to parse them. Those blocks are never
+printed — they exist to produce a weight and a time. Measured cost on a 40 mm
+PLA cube: 20.37 g against 20.62 g, about 1%.
 
 ### Why you can't just open the HTML file
 
@@ -98,13 +135,15 @@ The launcher serves both from one origin, which makes the whole flow work with
 nothing to configure. `dist/vibes3d-studio.html` is still handy for looking at
 the design offline, but exact pricing will not work from it.
 
-### Which Bambu Studio a price came from
+### Which slicer a price came from
 
 `server/src/slicer.js` resolves the slicer in this order:
 
-1. `BAMBU_STUDIO_BIN`, if set — the deliberate override
-2. `vendor/bambu-studio/` — the bundled copy
-3. a Bambu Studio installed on the machine, in the usual locations
+1. `ORCA_SLICER_BIN`, if set — the deliberate override
+   (`BAMBU_STUDIO_BIN` is still honoured, for shops that set it before the
+   engine changed)
+2. `vendor/orcaslicer/` — the bundled copy
+3. an OrcaSlicer installed on the machine, in the usual locations
 
 The bundled copy beats an installed one, so a folder carrying its own slicer
 doesn't quietly switch to whatever version happens to be on the host. The
@@ -127,7 +166,7 @@ Nothing to install, nothing to break behind a proxy or without network access.
 ## Deploying it as a service
 
 The launcher is for running the shop on one machine. To put the quoting service
-on a server, see **`server/README.md`** — it uses Docker with a Bambu Studio
+on a server, see **`server/README.md`** — it uses Docker with an OrcaSlicer
 Linux AppImage URL passed at build time:
 
 ```bash
@@ -206,7 +245,7 @@ shows.
 
 Bambu tags every run of extrusion in the G-code with `; FEATURE: <role>` and
 prints in relative-E mode, so summing E between those markers gives filament per
-component — the same data the Bambu Studio GUI reads for its own table.
+component — the same data the slicer's GUI reads for its own table.
 `FeatureScanner` in `server/src/gcode.js` does that in one streaming pass,
 keeping only running sums, so a hundred-megabyte plate costs nothing in memory.
 
@@ -268,7 +307,7 @@ the same price. $20 job minimum.
   discrete filaments to count. Nothing in the file says how it would be
   separated onto an AMS.
 - **PLA and ASA.** Adding another means adding it to `CONFIG.materials` and
-  exporting its filament profile via `FILAMENTS` in `export-profiles.js`.
+  adding it to `TARGETS` in `build-profiles.js`.
 - **Quotes reflect one print profile.** Whatever infill and wall count you
   export into `p2s_process.json` is what every customer is priced against.
 - **Supports are on** (`enable_support: 1`, tree(auto)). Customer uploads are
@@ -276,7 +315,7 @@ the same price. $20 job minimum.
   overhang parts get supports and are priced for them. With supports off, an
   overhang model quoted ~74% light on material (18.02g vs 31.39g on a T-shaped
   test part) and would likely have failed on the plate. It is a service
-  override in `export-profiles.js`, so it survives a re-export.
+  override in `build-profiles.js`, so it survives a rebuild.
 - **Print time is deliberately not shown.** It is parsed and returned by the
   API, but only ever matched reality for a single-color print — on a
   319-change multicolor job the slice said 2h13m against a real 16h4m, and an
@@ -299,6 +338,6 @@ the same price. $20 job minimum.
   Production Extension (cross-file `p:path` component references, which
   three.js's stock loader can't follow) in the same pass, so nothing is parsed
   twice.
-- **Bambu Studio is AGPLv3.** Calling the released CLI as a separate process is
+- **OrcaSlicer is AGPLv3.** Calling the released CLI as a separate process is
   ordinary use; modifying the slicer tightens obligations considerably. Not
   legal advice.

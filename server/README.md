@@ -1,6 +1,7 @@
 # Vibes 3D Studio — quote service
 
-Slices uploaded models with **Bambu Studio's headless CLI** and returns a price
+Slices uploaded models with **OrcaSlicer's headless CLI**, on Bambu's own P2S
+profiles, and returns a price
 based on the real filament weight, not a volume estimate.
 
 ## Why this exists
@@ -14,7 +15,7 @@ but print nearly solid). On a 200mm hollow box it under-estimated by ~40%
 ## Running it on one machine
 
 For the single-machine case — the shop's own computer — don't use Docker. Run
-`node setup.js` from the project root: it bundles Node and Bambu Studio into
+`node setup.js` from the project root: it bundles Node and OrcaSlicer into
 `vendor/` and `start.js` serves the site and this API from one origin. See the
 root `README.md`. The rest of this file is about deploying it as a service.
 
@@ -33,10 +34,10 @@ node scripts/verify-profiles.js   # slices a test cube and prices it
 means quoting works end to end rather than only that the files parse.
 
 Re-export only if you change how you actually print. Select the process and
-filament you use in the Bambu Studio GUI, then:
+filament you print with, then:
 
 ```bash
-node scripts/export-profiles.js   # rewrites the three files in profiles/
+node scripts/build-profiles.js   # rewrites the three files in profiles/
 ```
 
 It refuses to export a non-P2S machine, since the viewer only ever shows a P2S
@@ -44,12 +45,12 @@ build volume; `--allow-other-printer` overrides that.
 
 Do **not** hand-write these. They are fully resolved on purpose: the CLI does
 not follow a profile's `inherits` chain, so any key the file doesn't state
-itself falls back to Bambu Studio's generic defaults — silently, with a
+itself falls back to the engine's generic defaults — silently, with a
 successful slice and a wrong number. The leaf's identity keys (`name`,
 `inherits`, `from`, `setting_id`) are preserved so the printer/process
 compatibility check still passes.
 
-Do not use `--export-settings` either: headless it dumps Bambu Studio's generic
+Do not use `--export-settings` either: headless it dumps the engine's generic
 defaults (200×200×100 bed, zero filament density), not your printer.
 `profiles/README.md` has the details.
 
@@ -207,8 +208,8 @@ unhandled rejections instead of letting them exit. A dropped request is
 annoying; a dead process takes the storefront down until somebody notices the
 window closed, and from the browser both look like "couldn't connect".
 
-**Which slicer ran.** `resolveBambuBin()` tries `BAMBU_STUDIO_BIN`, then
-`vendor/bambu-studio/` in the project root, then the standard install paths. In
+**Which slicer ran.** `resolveBambuBin()` tries `ORCA_SLICER_BIN`, then
+`vendor/orcaslicer/` in the project root, then the standard install paths. In
 Docker the AppImage wrapper is on the first of those. `/api/health` reports
 `setup.slicerVendored` so you can tell a bundled slicer from a host one — worth
 checking when two deployments disagree about a price.
@@ -231,21 +232,21 @@ is persisted.
 ## Troubleshooting
 
 **`slicer: "unavailable"`** — the AppImage didn't extract or is missing a
-system library. Run `docker compose exec quote-service bambu-studio --help`.
+system library. Run `docker compose exec quote-service orca-slicer --help`.
 
 **Quotes that look far too cheap** — check `weightSource` in the response.
-`slicer_reported` is the good path. Anything else means Bambu Studio emitted
+`slicer_reported` is the good path. Anything else means the slicer emitted
 `0.00 g` because the filament profile has no density, and the service fell
 back to computing weight itself. Quotes stay correct, but fix the profile.
 
 **`NO_GCODE` / 422** — usually a non-manifold mesh, or a model landing outside
-the build volume. Try the same file in the Bambu Studio GUI to confirm.
+the build volume. Try the same file in a slicer GUI to confirm.
 
 **`EXCEEDS_BED` / 422** — the slicer rejected the model as not fully inside the
 plate (`return_code -50`). If it looks like it should fit, check
 `printable_area` in `profiles/p2s_machine.json`: it must be the P2S's
-256×256, and it is only there because `export-profiles.js` resolves the
-`inherits` chain. An unresolved profile silently gets Bambu Studio's generic
+256×256, and it is only there because `build-profiles.js` resolves the
+`inherits` chain. An unresolved profile silently gets the engine's generic
 200×200 default and rejects anything wider.
 
 **A `413` that arrives as a dropped connection** — fixed, but worth knowing the
@@ -260,12 +261,22 @@ stream resolved on `'close'` and not `'finish'`. `finish` only means the bytes
 reached the OS; the file descriptor is still open, and Windows refuses another
 process a read handle on a file we still hold open for writing.
 
-**`export-profiles.js` says "No process preset named (Something.3mf)(Something.3mf)"**
-— Bambu Studio records the *current project's* preset in `BambuStudio.conf`, and
-editing any setting with a project open turns that into a project-local name
-that exists only inside the project file. The exporter falls back to the
-documented P2S default and says so loudly. Select a saved vendor preset in the
-GUI if you want a different one exported.
+**`build-profiles.js` says `missing <kind> preset "<name>"`** — a preset in the
+`inherits` chain is not in the tree it is reading. Either `TARGETS` names a
+preset that does not exist (check the spelling against
+`server/profiles/bambu-presets/BBL/`), or `bambu-presets/` was refreshed from a
+Bambu Studio version that renamed a parent. Point it at a full Bambu Studio data
+directory to rebuild against everything:
+
+```bash
+node scripts/build-profiles.js --from "%APPDATA%\BambuStudio"
+```
+
+**A slice dies with `not in range`** — OrcaSlicer validates some settings that
+Bambu Studio accepts, and refuses the job rather than clamping. `VALUE_FIXES` in
+`build-profiles.js` holds the known ones with a reason each; add the new key
+there rather than editing the generated profile, which is overwritten on every
+rebuild.
 
 **Print time roughly double the slicer's** — fixed, but the shape is worth
 knowing. Bambu writes both durations on a single line:
@@ -280,28 +291,28 @@ swallowed the rest — then `parseDuration`, which sums every number+unit it
 finds, added the two together. The patterns now match mid-line and stop at the
 `;`. `server/test/gcode.test.cjs` pins this against the real line.
 
-**Errors with no detail on Windows** — `bambu-studio.exe` is a GUI-subsystem
+**Errors with no detail on Windows** — `orca-slicer.exe` is a GUI-subsystem
 binary and writes nothing to a console, so stdout and stderr come back empty.
 The reason is in the CLI's own `result.json`, written to its working directory;
 `slicer.js` reads it and puts `error_string` in front of the customer.
 
 **"The selected printer is not compatible with the process preset"** — the
 machine or process profile was flattened, renamed, or hand-assembled. Both must
-keep their `inherits` line so Bambu Studio can resolve them against its own
-vendor database. Re-run `node scripts/export-profiles.js`.
+keep their `inherits` line so the slicer can resolve them against its own
+vendor database. Re-run `node scripts/build-profiles.js`.
 
 **Nothing on stdout from the slicer on Windows** — expected.
-`bambu-studio.exe` is a GUI-subsystem binary and writes nothing to a console,
+`orca-slicer.exe` is a GUI-subsystem binary and writes nothing to a console,
 so `SliceError.detail` comes back empty there. The CLI's own `result.json`,
 written into the slice working directory, carries `error_string` instead.
 
-**Slow first request** — no warm-up trick here; Bambu Studio starts fresh each
+**Slow first request** — no warm-up trick here; the slicer starts fresh each
 call. If cold-start latency matters, keep the container warm and scale
 horizontally.
 
 ## Licensing
 
-Bambu Studio is **AGPLv3**. Invoking the released CLI as a separate process is
+OrcaSlicer is **AGPLv3**. Invoking the released CLI as a separate process is
 ordinary use and how print-farm tooling generally works, but AGPL obligations
 tighten considerably if you modify the slicer itself. Not legal advice — worth
 a lawyer's read before this earns money.

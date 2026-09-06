@@ -2,9 +2,8 @@
   VIBES 3D STUDIO — START HERE
 ══════════════════════════════════════════════════════════════════
 
-  Double-click:   START-WINDOWS.bat
-
-  (Windows only.)
+  1. Unzip this folder somewhere (Desktop is fine).
+  2. Double-click:   START-WINDOWS.bat
 
   A black window opens, and your browser opens the site
   automatically at:  http://localhost:8080
@@ -12,48 +11,57 @@
   Leave the black window open while you're using the site.
   Closing it stops the server.
 
-
-──────────────────────────────────────────────────────────────────
-  THE FIRST RUN TAKES A MINUTE
-──────────────────────────────────────────────────────────────────
-
-  The first double-click sets the folder up to run on its own.
-  It copies Node.js and Bambu Studio into a "vendor" folder
-  inside this one — about a minute, and about 250 MB of disk.
-
-  After that, this folder needs nothing else. No Node.js on the
-  machine, no Bambu Studio installed, no settings, no internet.
-  Copy it to another computer and it still works.
-
-  You'll see it counting files. That's normal. Every run after
-  the first starts immediately.
+  That's everything. There is no step 3.
 
 
 ──────────────────────────────────────────────────────────────────
-  WHAT THAT FIRST RUN NEEDS
+  NOTHING TO INSTALL, NOTHING TO DOWNLOAD
 ──────────────────────────────────────────────────────────────────
 
-  It copies rather than downloads, so it needs one of each to
-  copy — once, on this machine only:
+  This folder carries everything it needs:
 
-  1. NODE.JS
-     If it isn't installed, the launcher opens the download
-     page and tells you what to do. Free, about two minutes.
-     Only the first run needs it: setup keeps a copy in the
-     folder and uses that from then on.
+    Node.js       — no need to install it
+    OrcaSlicer    — the slicing engine, bundled in vendor/
+    P2S profiles  — the printer settings, already set up
 
-  2. BAMBU STUDIO
-     Install it from https://bambulab.com/download if you
-     don't have it. If you already use it for your P2S,
-     there's nothing to do — it gets found automatically.
+  No internet connection is required. No accounts, no settings,
+  no first-run setup. Copy the folder to another computer and it
+  still works.
 
-  Bambu Studio comes as a normal installer rather than a
-  zip file, so there's nothing setup could download and
-  unpack by itself. Copying the one on this machine also
-  means quotes come from the exact version you print with.
+  Every run starts immediately, including the first.
 
-  Setup finishes by slicing a test cube and printing the
-  price, so you know it works before a customer does.
+
+──────────────────────────────────────────────────────────────────
+  WHAT WORKS
+──────────────────────────────────────────────────────────────────
+
+  Everything: the website, uploading models, the 3D viewer,
+  resizing and rotating, and "Get exact price" — which runs a
+  real slice on a real Bambu Lab P2S profile.
+
+  The printer settings are already here — the standard P2S
+  profile with a 0.4mm nozzle, 0.20mm layers, and Bambu PLA
+  Basic or ASA. Nothing to pick or configure.
+
+
+──────────────────────────────────────────────────────────────────
+  WHERE THE PRICES COME FROM
+──────────────────────────────────────────────────────────────────
+
+  The engine is OrcaSlicer, but the settings are Bambu's.
+
+  The profiles in server/profiles/ are built from Bambu Studio's
+  own presets for the P2S — the same layer heights, speeds,
+  temperatures, flow rates and filament densities the shop
+  prints with. OrcaSlicer is the program that reads them.
+
+  Why not Bambu Studio itself? It ships only as a GUI installer,
+  so it cannot be carried inside a folder — which is why the
+  older version of this app needed you to install Bambu Studio
+  first, and said "The slicing engine isn't installed on the
+  server yet" when you hadn't. OrcaSlicer is a fork of Bambu
+  Studio with the same command line, and it publishes a portable
+  build, so it can travel with the app.
 
 
 ──────────────────────────────────────────────────────────────────
@@ -63,27 +71,15 @@
   A blue "Windows protected your PC" box appears:
       Click "More info" → "Run anyway"
 
-  IMPORTANT: unzip the folder first. Running the launcher from
-  inside the .zip won't work — the files it needs aren't there yet.
+  "This copy is incomplete":
+      The zip was only partly unpacked. Unzip the whole folder
+      again, and run the launcher from the unzipped copy — not
+      from inside the .zip preview window.
 
-
-──────────────────────────────────────────────────────────────────
-  WHAT WORKS RIGHT AWAY
-──────────────────────────────────────────────────────────────────
-
-  Once setup has run, everything works: the website, uploading
-  models, the 3D viewer, resizing and rotating, and "Get exact
-  price" — which runs a real slice on a real Bambu Lab P2S
-  profile.
-
-  If setup couldn't find Bambu Studio to copy, the app still
-  starts and everything except "Get exact price" works. The
-  black window prints a checklist saying exactly what's
-  missing and what to do about it.
-
-  The printer settings are already here — the standard P2S
-  profile with a 0.4mm nozzle, 0.20mm layers and Bambu PLA
-  Basic. Nothing to pick or configure.
+  Port 8080 already in use:
+      Something else is on that port. Open a terminal here and
+      run:   vendor\node\node.exe start.js
+      after setting PORT, e.g.  set PORT=8081
 
 
 ──────────────────────────────────────────────────────────────────
@@ -91,7 +87,8 @@
 ──────────────────────────────────────────────────────────────────
 
   README.md                    full documentation
-  vendor/README.md             what got copied into this folder
+  vendor/README.md             what is bundled, and its licences
+  vendor/licenses/NOTICE.md    third-party licences and sources
   server/README.md             the quoting service in detail
   dist/vibes3d-studio.html     design preview you can open
                                directly — but exact pricing

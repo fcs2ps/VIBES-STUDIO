@@ -1,6 +1,6 @@
 # Vibes 3D Studio — headless slicing quote service
 #
-# Bambu Studio ships for Linux as an AppImage. AppImages normally need FUSE,
+# OrcaSlicer ships for Linux as an AppImage. AppImages normally need FUSE,
 # which is awkward inside a container, so we extract it at build time and run
 # the extracted AppRun directly. It is still a GTK app underneath even in CLI
 # mode, so xvfb provides a virtual display.
@@ -30,31 +30,31 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
   && apt-get install -y --no-install-recommends nodejs \
   && rm -rf /var/lib/apt/lists/*
 
-# --- Bambu Studio ------------------------------------------------------------
-# Pin a specific release. Check https://github.com/bambulab/BambuStudio/releases
-# for the current Linux AppImage asset and override at build time:
-#   docker build --build-arg BAMBU_URL="https://github.com/.../Bambu_Studio_....AppImage" .
-ARG BAMBU_URL=""
+# --- OrcaSlicer --------------------------------------------------------------
+# The slicing engine. Pinned by default to the release the profiles were built
+# and verified against; override at build time to move it:
+#   docker build --build-arg ORCA_URL="https://github.com/.../OrcaSlicer_....AppImage" .
+#
+# The app folder bundles this same release into vendor/ (see ../setup.js). The
+# container fetches it instead, because an image should build from its own
+# Dockerfile rather than from whatever happens to be in the build context.
+ARG ORCA_VERSION=2.4.0
+ARG ORCA_URL=""
 RUN set -eux; \
-    if [ -z "$BAMBU_URL" ]; then \
-      echo "ERROR: BAMBU_URL build arg is required."; \
-      echo "Find the Linux .AppImage asset at https://github.com/bambulab/BambuStudio/releases"; \
-      echo "then rebuild with --build-arg BAMBU_URL=<url>"; \
-      exit 1; \
-    fi; \
-    curl -fSL "$BAMBU_URL" -o /tmp/bambu.AppImage; \
-    chmod +x /tmp/bambu.AppImage; \
+    url="${ORCA_URL:-https://github.com/SoftFever/OrcaSlicer/releases/download/v${ORCA_VERSION}/OrcaSlicer_Linux_AppImage_Ubuntu2404_V${ORCA_VERSION}.AppImage}"; \
+    curl -fSL "$url" -o /tmp/orca.AppImage; \
+    chmod +x /tmp/orca.AppImage; \
     cd /opt; \
-    /tmp/bambu.AppImage --appimage-extract > /dev/null; \
-    mv /opt/squashfs-root /opt/bambu-studio; \
-    rm /tmp/bambu.AppImage; \
-    ls /opt/bambu-studio/AppRun
+    /tmp/orca.AppImage --appimage-extract > /dev/null; \
+    mv /opt/squashfs-root /opt/orcaslicer; \
+    rm /tmp/orca.AppImage; \
+    ls /opt/orcaslicer/AppRun
 
-# Wrapper so `bambu-studio` works as a normal command, with the virtual
+# Wrapper so `orca-slicer` works as a normal command, with the virtual
 # display already attached.
-RUN printf '#!/bin/sh\nexec xvfb-run -a --server-args="-screen 0 1280x1024x24" /opt/bambu-studio/AppRun "$@"\n' \
-      > /usr/local/bin/bambu-studio \
-  && chmod +x /usr/local/bin/bambu-studio
+RUN printf '#!/bin/sh\nexec xvfb-run -a --server-args="-screen 0 1280x1024x24" /opt/orcaslicer/AppRun "$@"\n' \
+      > /usr/local/bin/orca-slicer \
+  && chmod +x /usr/local/bin/orca-slicer
 
 # --- app ---------------------------------------------------------------------
 WORKDIR /app
@@ -67,7 +67,7 @@ COPY profiles ./profiles
 # Slicing writes scratch files; keep them on a tmpfs-friendly path.
 ENV NODE_ENV=production \
     PORT=8080 \
-    BAMBU_STUDIO_BIN=bambu-studio \
+    ORCA_SLICER_BIN=orca-slicer \
     PROFILE_DIR=/app/profiles \
     SLICE_TIMEOUT_MS=180000 \
     MAX_CONCURRENT_SLICES=2
