@@ -4,8 +4,11 @@
 /vendor/*
 !/vendor/README.md
 
-# Release zips, built by `node make-release.js`.
+# Release archives, built by `node make-release.js`, and any split parts of
+# them made for transfer. Rebuildable, and they carry the bundled AGPL
+# binaries — see vendor/README.md.
 /dist/*.zip
+/dist/*.zip.part*
 
 node_modules/
 result.json
