@@ -365,5 +365,11 @@
   "compatible_printers": [
     "Bambu Lab P2S 0.4 nozzle"
   ],
-  "curr_bed_type": "Textured PEI Plate"
+  "curr_bed_type": "Textured PEI Plate",
+  "wipe_tower_x": [
+    "200"
+  ],
+  "wipe_tower_y": [
+    "200"
+  ]
 }

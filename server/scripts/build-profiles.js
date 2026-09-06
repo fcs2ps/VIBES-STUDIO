@@ -93,6 +93,16 @@ const PROCESS_DEFAULTS = {
    * PEI is the plate that takes PLA and ASA both.
    */
   curr_bed_type: 'Textured PEI Plate',
+
+  /*
+   * Where the prime tower stands. Also not cosmetic: a painted multi-colour
+   * model needs one, and with no position stated the slicer puts it off the
+   * plate and refuses the whole job with "Found G-code in unprintable area of
+   * multi-extruder" (return -102) — so a multi-colour upload gets no quote at
+   * all. Back corner of the 256mm plate, clear of a centred part.
+   */
+  wipe_tower_x: ['200'],
+  wipe_tower_y: ['200'],
 };
 
 /* ------------------------------------------------------------------ index -- */

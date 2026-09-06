@@ -6,6 +6,7 @@ const fsSync = require('fs');
 const os = require('os');
 const path = require('path');
 const zipReader = require('./zip');
+const { writeZip } = require('./zipwrite');
 const { parseGcodeStats, FeatureScanner } = require('./gcode');
 
 // Cap on how much G-code we will decompress into memory. Real plate G-code for
@@ -329,6 +330,167 @@ async function isBambuProject(modelPath) {
   }
 }
 
+/* ======================================================= painted models == */
+
+/*
+ * A multi-colour model carries its colour assignment inside the .3mf, as a
+ * per-triangle attribute. Two slicers, two names for it:
+ *
+ *   PrusaSlicer   slic3rpe:mmu_segmentation
+ *   OrcaSlicer    paint_color
+ *
+ * OrcaSlicer knows both names but its command line drops the PrusaSlicer one on
+ * import, and a model loaded with a single filament has nowhere to put colours
+ * two and up anyway. Either way the paint is discarded in silence: the slice
+ * succeeds, and it quotes the model as if it were one colour.
+ *
+ * That is not a rounding error. Where two colours meet, the slicer lays a solid
+ * interface, and each colour region needs its own perimeter loops. On a painted
+ * figurine measured against Bambu Studio, honouring the paint moved the model
+ * from 19.57 g to 23.51 g against Bambu's 23.82 g - the difference between 18%
+ * under and 1.3% under.
+ */
+const PAINT_ATTR_SOURCE = 'slic3rpe:mmu_segmentation';
+const PAINT_ATTR_TARGET = 'paint_color';
+
+// Bambu's AMS addresses 16 filaments; nothing sane paints more.
+const MAX_PAINT_FILAMENTS = 16;
+
+/** Model files inside a .3mf, where the per-triangle paint attributes live. */
+const MODEL_ENTRY = /(^|\/)3D\/.*\.model$/i;
+
+/**
+ * Reads how many filaments a project's own configuration declares.
+ *
+ * Counting the distinct paint codes would mean decoding the subdivision
+ * encoding; the config states the answer outright, in whichever slicer's
+ * dialect the file was written.
+ */
+function declaredFilamentCount(entries, buf) {
+  const read = (re) => {
+    const e = entries.find((x) => re.test(x.name));
+    if (!e) return null;
+    try { return zipReader.readEntry(buf, e).toString('utf8'); } catch { return null; }
+  };
+
+  // Bambu / Orca project.
+  const bambu = read(/project_settings\.config$/i);
+  if (bambu) {
+    try {
+      const json = JSON.parse(bambu);
+      const ids = json.filament_settings_id || json.filament_colour;
+      if (Array.isArray(ids) && ids.length) return ids.length;
+    } catch { /* fall through */ }
+  }
+
+  // PrusaSlicer project: per-filament settings are comma-separated lists.
+  const prusa = read(/Slic3r_PE\.config$/i);
+  if (prusa) {
+    const m = /^;\s*filament_diameter\s*=\s*(.+)$/m.exec(prusa);
+    if (m) {
+      const n = m[1].split(',').length;
+      if (n > 0) return n;
+    }
+  }
+  return null;
+}
+
+/**
+ * Reports whether an upload is painted, and with how many filaments.
+ *
+ * @returns {Promise<{painted: boolean, needsConversion: boolean, colorCount: number}>}
+ */
+async function inspectPaint(modelPath) {
+  const none = { painted: false, needsConversion: false, colorCount: 1 };
+  let buf;
+  try {
+    buf = await fs.readFile(modelPath);
+  } catch {
+    return none;
+  }
+  if (!zipReader.isZip(buf)) return none;
+
+  let entries;
+  try { entries = zipReader.listEntries(buf); } catch { return none; }
+
+  let painted = false;
+  let needsConversion = false;
+  for (const entry of entries.filter((e) => MODEL_ENTRY.test(e.name))) {
+    let text;
+    try { text = zipReader.readEntry(buf, entry).toString('utf8'); } catch { continue; }
+    if (text.includes(PAINT_ATTR_SOURCE)) { painted = true; needsConversion = true; break; }
+    if (text.includes(PAINT_ATTR_TARGET + '=')) { painted = true; break; }
+  }
+  if (!painted) return none;
+
+  const declared = declaredFilamentCount(entries, buf);
+  const colorCount = Math.min(Math.max(declared || 4, 2), MAX_PAINT_FILAMENTS);
+  return { painted, needsConversion, colorCount };
+}
+
+/**
+ * Rewrites a .3mf so the slicer sees the paint under the name it reads.
+ *
+ * Only the attribute name changes; the encoded value is the same scheme in both
+ * slicers, and every other entry is copied through byte for byte.
+ */
+async function convertPaintAttributes(modelPath, workDir) {
+  const buf = await fs.readFile(modelPath);
+  const entries = zipReader.listEntries(buf);
+
+  const out = [];
+  for (const entry of entries) {
+    let data = zipReader.readEntry(buf, entry);
+    if (MODEL_ENTRY.test(entry.name)) {
+      const text = data.toString('utf8');
+      if (text.includes(PAINT_ATTR_SOURCE)) {
+        data = Buffer.from(
+          text.split(PAINT_ATTR_SOURCE + '=').join(PAINT_ATTR_TARGET + '='), 'utf8');
+      }
+    }
+    out.push({ name: entry.name, data });
+  }
+
+  const dest = path.join(workDir, 'painted.3mf');
+  await fs.writeFile(dest, writeZip(out));
+  return dest;
+}
+
+/**
+ * Writes one filament profile per colour.
+ *
+ * The customer picks a material, not a palette, so every colour is the same
+ * filament; they differ only by colour so the slicer keeps them apart. Grams
+ * are what we price, and those do not depend on which colour went where.
+ */
+async function writePaintFilaments(filamentProfile, count, workDir) {
+  const raw = await fs.readFile(filamentProfile, 'utf8');
+  const base = JSON.parse(raw);
+  const paths = [];
+  for (let i = 0; i < count; i++) {
+    const copy = { ...base };
+    copy.name = `${base.name} c${i + 1}`;
+    if (base.setting_id) copy.setting_id = `${base.setting_id}_c${i + 1}`;
+    // Distinct colours only so the slicer treats them as separate filaments.
+    const hue = Math.round((360 / count) * i);
+    copy.filament_colour = [hslHex(hue)];
+    const file = path.join(workDir, `filament_${i + 1}.json`);
+    await fs.writeFile(file, JSON.stringify(copy, null, 2));
+    paths.push(file);
+  }
+  return paths;
+}
+
+/** Evenly spaced, fully saturated colours - only their distinctness matters. */
+function hslHex(hue) {
+  const f = (n) => {
+    const k = (n + hue / 30) % 12;
+    const v = 0.5 - 0.5 * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(255 * v).toString(16).padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
 /**
  * Totals filament per component by streaming the plate G-code once.
  *
@@ -471,10 +633,29 @@ async function sliceModel(modelPath, opts = {}) {
    */
   const useProjectSettings = await isBambuProject(modelPath);
 
+  /*
+   * A painted model has to be sliced with one filament per colour, or the
+   * paint is ignored and the model quotes as if it were a single colour.
+   * A Bambu project already carries its own filament list, so this only
+   * applies to the meshes we slice with our profiles.
+   */
+  const paint = useProjectSettings
+    ? { painted: false, needsConversion: false, colorCount: 1 }
+    : await inspectPaint(modelPath);
+
   try {
+    let sliceInput = modelPath;
+    if (paint.painted && paint.needsConversion) {
+      sliceInput = await convertPaintAttributes(modelPath, workDir);
+    }
+
+    const filaments = paint.painted
+      ? await writePaintFilaments(profiles.filament, paint.colorCount, workDir)
+      : [profiles.filament];
+
     const args = useProjectSettings ? [] : [
       '--load-settings', `${profiles.machine};${profiles.process}`,
-      '--load-filaments', profiles.filament,
+      '--load-filaments', filaments.join(';'),
       // Place the part on the plate. Note we deliberately do NOT pass
       // --orient: the customer already chose an orientation in the viewer,
       // and letting the slicer re-orient would silently quote a different
@@ -484,7 +665,7 @@ async function sliceModel(modelPath, opts = {}) {
     // A project already has its objects placed on the plate; re-arranging one
     // moves the print the customer approved.
     if (!useProjectSettings) args.push('--arrange', '1');
-    args.push('--slice', '0', '--debug', '2', '--export-3mf', outputPath, modelPath);
+    args.push('--slice', '0', '--debug', '2', '--export-3mf', outputPath, sliceInput);
 
     let stdout = '';
     let stderr = '';
@@ -556,6 +737,8 @@ async function sliceModel(modelPath, opts = {}) {
     }
 
     stats.usedProjectSettings = useProjectSettings;
+    stats.painted = paint.painted;
+    if (paint.painted) stats.colorCount = paint.colorCount;
 
     /*
      * On a multi-filament plate the G-code header's `total filament weight`
@@ -645,6 +828,8 @@ module.exports = {
   diagnostics,
   resolveSlicerBin,
   usingVendoredSlicer,
+  inspectPaint,
+  convertPaintAttributes,
   SliceError,
   profilePaths,
 };
