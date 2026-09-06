@@ -1469,7 +1469,11 @@ async function checkBackend() {
     populateMaterials(data.pricing);
 
     if (!setup.slicerFound) {
-      backendStatus.detail = 'The slicing engine isn\u2019t installed on the server yet.';
+      // A released copy carries its own slicer, so this means the folder is
+      // damaged rather than unconfigured. Say what to do about it.
+      backendStatus.detail =
+        'The slicing engine is missing from this copy of the app. ' +
+        'Re-unzip the folder, or run "node setup.js" in it.';
     } else if (setup.missingProfiles && setup.missingProfiles.length) {
       backendStatus.detail =
         `Printer profiles still need setting up (${setup.missingProfiles.join(', ')}).`;

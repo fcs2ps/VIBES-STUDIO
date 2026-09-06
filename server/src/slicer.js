@@ -20,22 +20,28 @@ const PROFILE_DIR = process.env.PROFILE_DIR || path.join(__dirname, '..', 'profi
 // close enough to that to be a coin flip on a slower shop machine.
 const SLICE_TIMEOUT_MS = Number(process.env.SLICE_TIMEOUT_MS || 600000);
 
-// A copy of Bambu Studio that `setup.js` placed inside this folder. When it is
-// there, the app has no external dependencies at all — which is the whole point
-// of vendoring — so it is checked before anything installed on the machine.
+// The copy of OrcaSlicer that ships inside this folder. In a released zip it is
+// always here, which is the whole point: the app depends on nothing installed
+// on the machine. It is checked before anything installed, so a folder carrying
+// its own slicer cannot quietly switch to a different version that happens to
+// be present — different version, different numbers, and nothing on screen
+// would say so.
 const VENDOR_DIR = path.join(__dirname, '..', '..', 'vendor');
 
 /**
- * Reads the vendored slicer's path out of vendor/MANIFEST.json.
+ * Reads the bundled slicer's path out of vendor/MANIFEST.json.
  *
- * The manifest records where setup.js actually put the binary, which differs by
- * platform (a bare .exe, an .app bundle, an .AppImage). Reading it beats
- * re-deriving the layout here and drifting out of step with setup.js.
+ * The manifest records where the release build actually put the binary, which
+ * differs by platform (a bare .exe, an .app bundle, an extracted AppImage).
+ * Reading it beats re-deriving the layout here and drifting out of step with
+ * whatever produced the folder.
  */
 function vendoredBin() {
   try {
     const manifest = JSON.parse(fsSync.readFileSync(path.join(VENDOR_DIR, 'MANIFEST.json'), 'utf8'));
-    const bin = path.join(VENDOR_DIR, manifest.bambuStudio.bin);
+    const rel = manifest.slicer && manifest.slicer.bin;
+    if (!rel) return null;
+    const bin = path.join(VENDOR_DIR, rel);
     fsSync.accessSync(bin, fsSync.constants.X_OK);
     return bin;
   } catch {
@@ -44,38 +50,44 @@ function vendoredBin() {
 }
 
 /**
- * Locates the Bambu Studio executable.
+ * Where an OrcaSlicer installed the ordinary way puts its executable.
  *
- * Order: an explicit BAMBU_STUDIO_BIN, then the vendored copy, then the
- * standard install locations. The vendored copy beats an installed one so that
- * a folder carrying its own slicer does not quietly switch to a different
- * version that happens to be on the machine — different version, different
- * numbers, and nothing on screen would say so.
+ * Only reached when the bundled copy is missing — a folder someone assembled by
+ * hand, or one where vendor/ was deleted. A released zip never gets this far.
  */
 const CANDIDATE_PATHS = [
   // macOS
-  '/Applications/BambuStudio.app/Contents/MacOS/BambuStudio',
-  '/Applications/Bambu Studio.app/Contents/MacOS/BambuStudio',
-  `${os.homedir()}/Applications/BambuStudio.app/Contents/MacOS/BambuStudio`,
+  '/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer',
+  `${os.homedir()}/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer`,
   // Windows
-  'C:\\Program Files\\Bambu Studio\\bambu-studio.exe',
-  'C:\\Program Files (x86)\\Bambu Studio\\bambu-studio.exe',
-  `${os.homedir()}\\AppData\\Local\\Programs\\Bambu Studio\\bambu-studio.exe`,
-  // Linux (Docker image installs this wrapper)
-  '/usr/local/bin/bambu-studio',
-  '/opt/bambu-studio/AppRun',
-  `${os.homedir()}/Applications/BambuStudio.AppImage`,
-  `${os.homedir()}/.local/bin/bambu-studio`,
+  'C:\\Program Files\\OrcaSlicer\\orca-slicer.exe',
+  'C:\\Program Files (x86)\\OrcaSlicer\\orca-slicer.exe',
+  `${os.homedir()}\\AppData\\Local\\Programs\\OrcaSlicer\\orca-slicer.exe`,
+  // Linux
+  '/usr/local/bin/orca-slicer',
+  '/usr/bin/orca-slicer',
+  '/opt/OrcaSlicer/AppRun',
+  `${os.homedir()}/Applications/OrcaSlicer.AppImage`,
+  `${os.homedir()}/.local/bin/orca-slicer`,
 ];
 
 let resolvedBin = null;
 let resolvedFromVendor = false;
 
-function resolveBambuBin() {
+/**
+ * Locates the slicer executable.
+ *
+ * Order: an explicit ORCA_SLICER_BIN, then the bundled copy, then anything
+ * installed on the machine.
+ */
+function resolveSlicerBin() {
   if (resolvedBin) return resolvedBin;
 
-  if (process.env.BAMBU_STUDIO_BIN) {
-    resolvedBin = process.env.BAMBU_STUDIO_BIN;
+  // BAMBU_STUDIO_BIN is still honoured: shops that set it before this app
+  // switched engines should not have their override silently ignored.
+  const override = process.env.ORCA_SLICER_BIN || process.env.BAMBU_STUDIO_BIN;
+  if (override) {
+    resolvedBin = override;
     return resolvedBin;
   }
 
@@ -86,11 +98,11 @@ function resolveBambuBin() {
     return resolvedBin;
   }
 
-  // Used by setup.js's post-install check: without it, a trim that broke the
-  // vendored copy would fall through to a system install and report a pass the
-  // shipped folder cannot reproduce.
+  // Used by the release build's post-install check: without it, a trim that
+  // broke the bundled copy would fall through to an installed one and report a
+  // pass the shipped folder cannot reproduce.
   if (process.env.VENDOR_ONLY === '1') {
-    resolvedBin = path.join(VENDOR_DIR, 'bambu-studio', '(not vendored)');
+    resolvedBin = path.join(VENDOR_DIR, 'orcaslicer', '(not bundled)');
     return resolvedBin;
   }
 
@@ -103,13 +115,13 @@ function resolveBambuBin() {
   }
 
   // Last resort: hope it's on PATH.
-  resolvedBin = 'bambu-studio';
+  resolvedBin = 'orca-slicer';
   return resolvedBin;
 }
 
-/** True once resolveBambuBin() has settled on the copy inside vendor/. */
+/** True once resolveSlicerBin() has settled on the copy inside vendor/. */
 function usingVendoredSlicer() {
-  resolveBambuBin();
+  resolveSlicerBin();
   return resolvedFromVendor;
 }
 
@@ -129,7 +141,7 @@ function run(bin, args, { timeout, cwd }) {
       cwd,
       maxBuffer: 32 * 1024 * 1024,
       killSignal: 'SIGKILL',
-      // Bambu Studio is a GUI app running headless; without these it can try
+      // OrcaSlicer is a GUI app running headless; without these it can try
       // to open an X display and hang. xvfb-run in the Dockerfile covers the
       // rest.
       env: { ...process.env, QT_QPA_PLATFORM: 'offscreen' },
@@ -248,7 +260,7 @@ const SLICER_RESULT_CODES = {
  * Reads the CLI's own result.json, which carries the real reason a slice
  * failed.
  *
- * This matters most on Windows, where bambu-studio.exe is a GUI-subsystem
+ * This matters most on Windows, where orca-slicer.exe is a GUI-subsystem
  * binary and writes nothing to a console at all — so stdout and stderr come
  * back empty and the customer gets "the slicer failed to process this model"
  * with no reason attached. result.json is the only channel that says, for
@@ -290,7 +302,7 @@ async function assertProfilesExist(material) {
       await fs.access(file);
     } catch {
       throw new SliceError(
-        `Missing the ${name} profile. Export real profiles from Bambu Studio before slicing — see server/README.md.`,
+        `Missing the ${name} profile. Build the profiles before slicing — see server/README.md.`,
         { code: 'PROFILE_MISSING', detail: file }
       );
     }
@@ -322,7 +334,7 @@ async function isBambuProject(modelPath) {
  *
  * Bambu tags every run of extrusion with `; FEATURE: <role>` and prints in
  * relative-E mode, so summing E between those markers reproduces the same
- * Model / Support / Purged / Tower split the Bambu Studio GUI shows — it is the
+ * Model / Support / Purged / Tower split a slicer GUI shows — it is the
  * same data the GUI reads.
  *
  * Two things this has to get right, both found the hard way against a slice
@@ -477,7 +489,7 @@ async function sliceModel(modelPath, opts = {}) {
     let stdout = '';
     let stderr = '';
     try {
-      ({ stdout, stderr } = await run(resolveBambuBin(), args, {
+      ({ stdout, stderr } = await run(resolveSlicerBin(), args, {
         timeout: SLICE_TIMEOUT_MS,
         cwd: workDir,
       }));
@@ -488,7 +500,7 @@ async function sliceModel(modelPath, opts = {}) {
       const result = await readSlicerResult(workDir);
       if (err instanceof SliceError && result && result.message) {
         // The slicer's own wording is written for someone sitting in the
-        // Bambu Studio GUI — it talks about plates and .3mf projects, neither
+        // slicer's GUI — it talks about plates and .3mf projects, neither
         // of which a customer uploading an STL has any idea about. Translate
         // the codes we understand and keep the raw text in `detail` for us.
         const known = SLICER_RESULT_CODES[result.returnCode];
@@ -567,7 +579,7 @@ async function sliceModel(modelPath, opts = {}) {
 
 async function slicerAvailable() {
   try {
-    await run(resolveBambuBin(), ['--help'], { timeout: 15000 });
+    await run(resolveSlicerBin(), ['--help'], { timeout: 15000 });
     return true;
   } catch {
     return false;
@@ -579,7 +591,7 @@ async function slicerAvailable() {
  * guidance at startup instead of failing on the first customer request.
  */
 async function diagnostics() {
-  const bin = resolveBambuBin();
+  const bin = resolveSlicerBin();
   const slicerVendored = usingVendoredSlicer();
   const slicerFound = await slicerAvailable();
 
@@ -631,7 +643,7 @@ module.exports = {
   readEmbeddedSliceInfo,
   slicerAvailable,
   diagnostics,
-  resolveBambuBin,
+  resolveSlicerBin,
   usingVendoredSlicer,
   SliceError,
   profilePaths,

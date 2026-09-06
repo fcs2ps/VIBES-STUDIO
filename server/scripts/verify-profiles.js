@@ -8,7 +8,7 @@
  * pass here means /api/quote will work — rather than only proving the files
  * parse. Catches the two failure modes that otherwise surface as a confident
  * wrong price: a bed size that isn't the printer's, and a filament profile
- * with no density (which makes Bambu Studio report 0.00 g).
+ * with no density (which makes the slicer report 0.00 g).
  */
 
 const fs = require('fs');
@@ -21,7 +21,7 @@ const { computeQuote } = require('../src/pricing');
 const CUBE_MM = 40;
 // 40mm cube, 0.20mm layers, 15% infill, 2 walls, PLA at 1.26 g/cm3 lands here.
 // Wide bounds — this is a "did the slicer really run" check, not a regression
-// test on Bambu Studio's infill maths.
+// test on the slicer's infill maths.
 const EXPECTED_MIN_G = 15;
 const EXPECTED_MAX_G = 40;
 
@@ -59,10 +59,10 @@ function checkProfilesResolved(diag) {
     console.error('These profiles are not fully resolved:\n');
     for (const p of problems) console.error('  - ' + p);
     console.error('\nThe slicer does not follow a profile\'s "inherits" chain, so any');
-    console.error('setting the file does not state itself silently falls back to Bambu');
-    console.error('Studio\'s generic defaults — and the slice still succeeds, with the');
+    console.error('setting the file does not state itself silently falls back to the');
+    console.error('slicer\'s generic defaults — and the slice still succeeds, with the');
     console.error('wrong numbers. Re-export them:\n');
-    console.error('  node server/scripts/export-profiles.js\n');
+    console.error('  node server/scripts/build-profiles.js\n');
     return false;
   }
 
@@ -99,18 +99,19 @@ async function main() {
   const diag = await diagnostics();
   console.log('slicer:   ' + diag.slicerBin + (diag.slicerFound ? '  [found]' : '  [NOT FOUND]'));
   for (const [name, info] of Object.entries(diag.profiles)) {
-    console.log('  ' + name.padEnd(9) + (info.present ? 'present' : 'MISSING') +
+    console.log('  ' + name.padEnd(14) + (info.present ? 'present' : 'MISSING') +
       (info.hasDensity === null ? '' : info.hasDensity ? '  density set' : '  NO DENSITY'));
   }
   console.log('');
 
   if (!diag.slicerFound) {
-    console.error('Bambu Studio was not found. Set BAMBU_STUDIO_BIN and retry.');
+    console.error('The slicer was not found. Run "node setup.js", or set');
+    console.error('ORCA_SLICER_BIN to an OrcaSlicer executable, and retry.');
     process.exit(1);
   }
   if (diag.missingProfiles.length) {
     console.error('Missing profiles: ' + diag.missingProfiles.join(', '));
-    console.error('Run: node server/scripts/export-profiles.js');
+    console.error('Run: node server/scripts/build-profiles.js');
     process.exit(1);
   }
 

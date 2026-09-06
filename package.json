@@ -4,7 +4,13 @@
   "description": "",
   "main": "main.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "esbuild src/main.js --bundle --outfile=bundle.js --format=iife && node build-single-file.js",
+    "setup": "node setup.js",
+    "start": "node start.js",
+    "profiles": "node server/scripts/build-profiles.js",
+    "verify": "node server/scripts/verify-profiles.js",
+    "release": "node make-release.js",
+    "test": "node smoke-test.cjs && npm --prefix server test"
   },
   "keywords": [],
   "author": "",

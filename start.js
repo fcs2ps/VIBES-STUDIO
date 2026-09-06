@@ -73,22 +73,21 @@ server.listen(PORT, async () => {
   if (diag) {
     console.log('  Slicing engine');
     if (diag.slicerFound && diag.slicerVendored) {
-      console.log('    [ok]  Bambu Studio — bundled in this folder');
+      console.log('    [ok]  OrcaSlicer - bundled in this folder');
       console.log(`          ${diag.slicerBin}`);
     } else if (diag.slicerFound) {
-      console.log('    [ok]  Bambu Studio — using the copy installed on this machine');
+      console.log('    [ok]  OrcaSlicer - using the copy installed on this machine');
       console.log(`          ${diag.slicerBin}`);
-      console.log('          Bundle it into this folder so it travels with the app:');
-      console.log('            node setup.js');
+      console.log('          This folder is meant to carry its own. Rebuild it with:');
+      console.log('            node setup.js --force');
     } else {
-      console.log('    [--]  Bambu Studio not found.');
-      console.log('          Install it once from https://bambulab.com/download,');
-      console.log('          then bundle it into this folder:');
+      console.log('    [--]  No slicer found - and this folder should have one.');
+      console.log('          A released copy of this app carries OrcaSlicer inside it,');
+      console.log('          so either vendor/ was deleted or the zip was unpacked');
+      console.log('          incompletely. Rebuild it:');
       console.log('            node setup.js');
-      console.log('          Or point at an existing copy with BAMBU_STUDIO_BIN:');
-      console.log('            Windows  C:\\Program Files\\Bambu Studio\\bambu-studio.exe');
-      console.log('            macOS    /Applications/BambuStudio.app/Contents/MacOS/BambuStudio');
-      console.log('            Linux    /path/to/Bambu_Studio.AppImage');
+      console.log('          Or point at an OrcaSlicer you already have:');
+      console.log('            ORCA_SLICER_BIN=/path/to/orca-slicer');
     }
 
     console.log('\n  Printer profiles');
@@ -104,8 +103,8 @@ server.listen(PORT, async () => {
       }
     }
     if (diag.missingProfiles.length) {
-      console.log('\n          Export them from your Bambu Studio install:');
-      console.log('            node server/scripts/export-profiles.js');
+      console.log('\n          Rebuild them from Bambu\'s presets:');
+      console.log('            node server/scripts/build-profiles.js');
       console.log('          Then check the result end to end:');
       console.log('            node server/scripts/verify-profiles.js');
     }
